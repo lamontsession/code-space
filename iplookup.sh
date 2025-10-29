@@ -43,4 +43,4 @@ else
 fi
 
 # Make the request and output the result to the screen
-# (Handled above, no need to repeat the curl command)
+
