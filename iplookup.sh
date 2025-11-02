@@ -45,9 +45,31 @@ if ! [[ "$ip_address" =~ ^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[
     exit 1
 fi
 
+# Function to prompt for tokens if needed
+prompt_for_tokens() {
+    # Check for IPinfo token
+    if [[ -z "$IPINFO_TOKEN" ]]; then
+        read -p "Would you like to enter an IPinfo.io token? (y/n): " use_ipinfo
+        if [[ "$use_ipinfo" == "y" || "$use_ipinfo" == "Y" ]]; then
+            read -p "Enter your IPinfo.io token: " IPINFO_TOKEN
+        fi
+    fi
+
+    # Check for IPQS key
+    if [[ -z "$IPQS_KEY" ]]; then
+        read -p "Would you like to enter an IPQualityScore API key? (y/n): " use_ipqs
+        if [[ "$use_ipqs" == "y" || "$use_ipqs" == "Y" ]]; then
+            read -p "Enter your IPQualityScore API key: " IPQS_KEY
+        fi
+    fi
+}
+
 # Use API tokens from config file or environment variables
 IPINFO_TOKEN=${IPINFO_TOKEN:-$TOKEN}
 IPQS_KEY=${IPQS_KEY:-$IPQS_API_KEY}
+
+# Prompt for tokens if not found in environment or config
+prompt_for_tokens
 
 # Set up URLs based on available tokens
 if [[ -n "$IPINFO_TOKEN" ]]; then
