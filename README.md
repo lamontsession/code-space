@@ -15,16 +15,19 @@ This repository contains the following key files:
 The IP lookup script (`iplookup.sh`) retrieves geographical and network information for IP addresses using two services:
 - IPinfo.io - Provides basic geographical and network information
 - IPQualityScore - Provides additional IP intelligence and threat assessment (optional)
+- GreyNoise - Provides Threat Actor intelligence, internet scanning heuristics, known malicious IP detection.
 
 ### Features
-- Supports both IPv4 and IPv6 addresses
-- Automatic IP address format validation
-- 10-second timeout for API calls
-- Rate limit detection
-- Error handling for API failures
-- Pretty-printed JSON output with jq (if installed)
-- Configuration via environment variables or config file
-- Help message via -h or --help flags
+- Supports both IPv4 and IPv6 addresses with strict input validation; errors if the format is incorrect.
+- Automatic detection and usage of API tokens for all services from environment variables, ~/.iplookup.conf config file, or interactive input prompt.
+- Interactive prompt mode – run iplookup.sh without arguments to be prompted for an IP address.
+- API calls include a 10-second timeout and error handling for failed requests.
+- Detection and reporting of rate limiting, empty responses, and failures for each service.
+- Pretty-prints JSON results using jq if installed; otherwise outputs raw JSON.
+- Optional GreyNoise and IPQualityScore lookups (configured independently).
+- Secure handling of tokens (masked when entering interactively).
+- Displays help message with -h or --help flags.
+- Requires only curl (mandatory) and jq (optional for pretty printing).
 
 ### Prerequisites
 - `bash` shell
@@ -50,6 +53,7 @@ You can configure API tokens in three ways:
 ```bash
 export IPINFO_TOKEN="your_ipinfo_token"  # For IPinfo.io service
 export IPQS_API_KEY="your_ipqs_api_key"  # For IPQualityScore service (optional)
+export GREYNOISE_API_KEY="your_greynoise_key" # GreyNoise (non-key requirement community edition available)
 ```
 
 2. Configuration file:
@@ -57,13 +61,15 @@ Create `~/.iplookup.conf` with:
 ```bash
 IPINFO_TOKEN="your_ipinfo_token"  # For IPinfo.io service
 IPQS_API_KEY="your_ipqs_api_key"  # For IPQualityScore service (optional)
+GREYNOISE_API_KEY="your_greynoise_key" # For GreyNoise service (non-key requirement community edition available)
 ```
 
 3. Interactive input:
 If no tokens are found in environment variables or the configuration file, the script will prompt you to enter them manually during execution. You can:
 - Choose to enter an IPinfo.io token
 - Choose to enter an IPQualityScore API key
-- Skip either or both to use the services without authentication
+- Choose to enter an GreyNoise API key
+- Skip all to use the services without authentication
 
 Note: The script works without API tokens but with rate limitations. Using API tokens provides higher rate limits and additional features. The script will use the first available token it finds in the order: environment variables → configuration file → manual input.
 
@@ -86,6 +92,11 @@ The script provides:
    - Fraud score and risk assessment
    - VPN/Proxy detection
    - Additional threat intelligence
+
+3. GreyNoise results showing (both via API key and free community API(50 searches per week limit)):
+   - Geographical location (city, region, country)
+   - Behavioral intelligence
+   - Threat intelligence
 
 Results are formatted as pretty-printed JSON when `jq` is installed, or raw JSON otherwise.
 
@@ -127,4 +138,4 @@ LaMont Session
 
 ## Last Updated
 
-2025-11-02
+2025-11-05
