@@ -159,9 +159,13 @@ if [[ -n "$GREYNOISE_KEY" ]]; then
     GREYNOISE_URL="https://api.greynoise.io/v3/ip/$ip_address"
     printf "\n--- GreyNoise Results ---\n"
     if ! curl --fail -sS --max-time 10 --request GET --url "$GREYNOISE_URL" \
-         --header "accept: application/json" \
-         --header "key: $GREYNOISE_KEY"; then
-        printf "Failed to retrieve GreyNoise data\n"
+            --header "accept: application/json" \
+            --header "key: $GREYNOISE_KEY"; then
+        printf "Failed to retrieve GreyNoise data with token, falling back to community results...\n"
+        # Community fallback on token failure
+        if ! curl --fail -sS --max-time 10 "https://api.greynoise.io/v3/community/$ip_address"; then
+            printf "Failed to retrieve GreyNoise community data\n"
+        fi
     fi
 else
     printf "\n--- GreyNoise Community Results ---\n"
@@ -170,6 +174,6 @@ else
     fi
 fi
 
-# Final message displayed to screen
-printf "\nIPLookup complete.\n"
 
+# Final message displayed to screen
+printf "\nIPLookup complete.\n\n"
