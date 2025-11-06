@@ -2,7 +2,7 @@
 
 # Author: LaMont Session
 # Date Created: 2025-10-28
-# Last Modified: 2025-11-05
+# Last Modified: 2025-11-06
 
 # Description:
 # This is an ip lookup script that retrieves geographical and network information for a given IP address.
