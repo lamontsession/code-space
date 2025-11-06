@@ -1,10 +1,5 @@
 #!/bin/bash
 
-# Fail on error, undefined var, and fail pipeline on first failing command
-set -euo pipefail
-# Safer IFS for word splitting
-IFS=$'\n\t'
-
 # Author: LaMont Session
 # Date Created: 2025-10-28
 # Last Modified: 2025-11-02
@@ -15,6 +10,16 @@ IFS=$'\n\t'
 # Usage:
 # iplookup <IP_ADDRESS>
 # iplookup -h|--help     Show this help message
+
+# Fail on error, undefined var, and fail pipeline on first failing command
+set -e  # Exit immediately if a command exits with a non-zero status
+set -u  # Treat unset variables as an error
+set -o pipefail  # Return the exit status of the first failed command in a pipeline
+# Safer IFS for word splitting
+# Exclude spaces to prevent word splitting bugs when handling input with spaces.
+# Note: Setting IFS to $'\n\t' is generally safe, but if user input (such as tokens) contains spaces,
+# this may cause unexpected behavior when reading or processing those values.
+IFS=$'\n\t'
 
 # Function to show help message
 show_help() {
