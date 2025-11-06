@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Fail on error, undefined var, and fail pipeline on first failing command
+set -euo pipefail
+# Safer IFS for word splitting
+IFS=$'\n\t'
+
 # Author: LaMont Session
 # Date Created: 2025-10-28
 # Last Modified: 2025-11-02
@@ -21,23 +26,34 @@ show_help() {
     exit 0
 }
 
-# Check for help flag
-if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
-    show_help
+# Check if any arguments were provided
+if [[ $# -eq 0 ]]; then
+    read -p "Enter an IP address to look up: " ip_address
+else
+    # Check for help flag
+    if [[ "${1:-}" == "-h" ]] || [[ "${1:-}" == "--help" ]]; then
+        show_help
+    fi
+    ip_address="${1:-}"
 fi
 
 # Load configuration if exists
 CONFIG_FILE="$HOME/.iplookup.conf"
 if [[ -f "$CONFIG_FILE" ]]; then
+    # shellcheck source=/dev/null
     source "$CONFIG_FILE"
 fi
 
-# Get IP address from argument or prompt user
-if [[ -n "$1" ]]; then
-    ip_address="$1"
-else
-    read -p "Enter an IP address to look up: " ip_address
+# Ensure required tools are available
+if ! command -v curl >/dev/null 2>&1; then
+    printf "Error: 'curl' is required but not installed.\n"
+    exit 1
 fi
+if ! command -v jq >/dev/null 2>&1; then
+    printf "Note: 'jq' not found — output will be raw JSON.\n"
+fi
+
+# IP address should already be set from earlier check
 
 # Validate IP address format (IPv4 and IPv6)
 if ! [[ "$ip_address" =~ ^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$ || "$ip_address" =~ ^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$ ]]; then
@@ -48,25 +64,38 @@ fi
 # Function to prompt for tokens if needed
 prompt_for_tokens() {
     # Check for IPinfo token
-    if [[ -z "$IPINFO_TOKEN" ]]; then
+    if [[ -z "${IPINFO_TOKEN:-}" ]]; then
         read -p "Would you like to enter an IPinfo.io token? (y/n): " use_ipinfo
         if [[ "$use_ipinfo" == "y" || "$use_ipinfo" == "Y" ]]; then
-            read -p "Enter your IPinfo.io token: " IPINFO_TOKEN
+            # hide token input
+            read -s -p "Enter your IPinfo.io token: " IPINFO_TOKEN
+            echo
         fi
     fi
 
     # Check for IPQS key
-    if [[ -z "$IPQS_KEY" ]]; then
+    if [[ -z "${IPQS_KEY:-}" ]]; then
         read -p "Would you like to enter an IPQualityScore API key? (y/n): " use_ipqs
         if [[ "$use_ipqs" == "y" || "$use_ipqs" == "Y" ]]; then
-            read -p "Enter your IPQualityScore API key: " IPQS_KEY
+            read -s -p "Enter your IPQualityScore API key: " IPQS_KEY
+            echo
+        fi
+    fi
+
+    # Check for GreyNoise key
+    if [[ -z "${GREYNOISE_KEY:-}" ]]; then
+        read -p "Would you like to enter a GreyNoise API key? (y/n): " use_gn
+        if [[ "$use_gn" == "y" || "$use_gn" == "Y" ]]; then
+            read -s -p "Enter your GreyNoise API key: " GREYNOISE_KEY
+            echo
         fi
     fi
 }
 
 # Use API tokens from config file or environment variables
-IPINFO_TOKEN=${IPINFO_TOKEN:-$TOKEN}
-IPQS_KEY=${IPQS_KEY:-$IPQS_API_KEY}
+IPINFO_TOKEN=${IPINFO_TOKEN:-${TOKEN:-}}
+IPQS_KEY=${IPQS_KEY:-${IPQS_API_KEY:-}}
+GREYNOISE_KEY=${GREYNOISE_KEY:-${GREYNOISE_API_KEY:-}}
 
 # Prompt for tokens if not found in environment or config
 prompt_for_tokens
@@ -84,38 +113,58 @@ call_api() {
     local response
     local exit_code
 
-    response=$(curl -s -m 10 "$url")  # 10 second timeout
-    exit_code=$?
+    # --fail: return non-zero on HTTP errors; -sS: silent but show errors; --max-time for timeout
+    response=$(curl --fail -sS --max-time 10 "$url" 2>&1) || exit_code=$?
+    exit_code=${exit_code:-0}
 
     if [[ $exit_code -ne 0 ]]; then
-        echo "Error: Failed to fetch data (curl exit code: $exit_code)"
+        printf "Error: Failed to fetch data (curl exit code: %s)\n" "$exit_code"
+        printf "%s\n" "$response"
         return 1
     fi
 
-    if [[ "$response" == *"rate limit"* ]] || [[ "$response" == *"quota exceeded"* ]]; then
-        echo "Error: API rate limit exceeded"
+    if [[ -z "${response:-}" ]]; then
+        printf "Warning: Empty response received from %s\n" "$url"
         return 1
     fi
 
     if command -v jq >/dev/null 2>&1; then
-        echo "$response" | jq
+        printf "%s\n" "$response" | jq
     else
-        echo "Note: Install 'jq' for pretty-printed output. Raw JSON follows:"
-        echo "$response"
+        printf "Note: Install 'jq' for pretty-printed output. Raw JSON follows:\n"
+        printf "%s\n" "$response"
     fi
 }
 
 # Output results
-echo -e "\n--- IPinfo Results ---"
+printf "\n--- IPinfo Results ---\n"
 call_api "$IPINFO_URL" || exit 1
+
 # IPQualityScore lookup if API key provided
 if [[ -n "$IPQS_KEY" ]]; then
     IPQS_URL="https://www.ipqualityscore.com/api/json/ip/$IPQS_KEY/$ip_address"
-    echo -e "\n--- IPQS Results ---"
-    call_api "$IPQS_URL" || echo "Failed to retrieve IPQS data"
+    printf "\n--- IPQS Results ---\n"
+    call_api "$IPQS_URL" || printf "Failed to retrieve IPQS data\n"
 else
     echo "IPQualityScore API key not provided. Skipping IPQS lookup."
 fi
+
+# GreyNoise lookup
+if [[ -n "$GREYNOISE_KEY" ]]; then
+    GREYNOISE_URL="https://api.greynoise.io/v3/ip/$ip_address"
+    printf "\n--- GreyNoise Results ---\n"
+    if ! curl --fail -sS --max-time 10 --request GET --url "$GREYNOISE_URL" \
+         --header "accept: application/json" \
+         --header "key: $GREYNOISE_KEY"; then
+        printf "Failed to retrieve GreyNoise data\n"
+    fi
+else
+    printf "\n--- GreyNoise Community Results ---\n"
+    if ! curl --fail -sS --max-time 10 "https://api.greynoise.io/v3/community/$ip_address"; then
+        printf "Failed to retrieve GreyNoise community data\n"
+    fi
+fi
+
 # Final message displayed to screen
-echo -e "\nIPLookup complete."
+printf "\nIPLookup complete.\n"
 
