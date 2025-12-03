@@ -11,8 +11,7 @@
 
 # Fail on error, undefined var, and fail pipeline on first failing command
 set -euo pipefail
-# Safer IFS for word splitting
-IFS=$'\n\t'
+
 
 # Get the directory where the script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
