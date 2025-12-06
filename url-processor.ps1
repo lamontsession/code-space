@@ -120,8 +120,8 @@ $outputTextBox.WordWrap = $true
 $outputTextBox.BackColor = [System.Drawing.Color]::WhiteSmoke
 $outputPanel.Controls.Add($outputTextBox)
 
-# Function to process URLs
-function Process-URLs {
+# Function to convert defanged URLs to standard format
+function ConvertFrom-DefangedURL {
     param([string]$inputText)
     
     if ([string]::IsNullOrWhiteSpace($inputText)) {
@@ -177,7 +177,7 @@ function Process-URLs {
 $processButton.Add_Click({
     try {
         $inputText = $inputTextBox.Text
-        $result = Process-URLs $inputText
+        $result = ConvertFrom-DefangedURL $inputText
         
         if ($result) {
             $outputTextBox.Text = $result
@@ -238,7 +238,7 @@ $exportButton.Add_Click({
 # Add keyboard shortcut support
 $form.KeyPreview = $true
 $form.Add_KeyDown({
-    param($sender, $e)
+    param($e)
     # Ctrl+Enter to process
     if ($e.Control -and $e.KeyCode -eq [System.Windows.Forms.Keys]::Enter) {
         $processButton.PerformClick()
