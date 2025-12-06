@@ -120,13 +120,38 @@ $outputTextBox.WordWrap = $true
 $outputTextBox.BackColor = [System.Drawing.Color]::WhiteSmoke
 $outputPanel.Controls.Add($outputTextBox)
 
+# Function to detect if a URL appears to be defanged
+function Test-DefangedURL {
+    param([string]$url)
+    
+    $url = $url.Trim()
+    if ([string]::IsNullOrEmpty($url)) {
+        return $false
+    }
+    
+    # Check for common defanging patterns
+    $defangPatterns = @(
+        '\[.*\]',          # Square brackets: [.], [at], [dot], etc.
+        'hxxp',            # hxxp:// or hxxps://
+        '\{.*\}'           # Braces: {.}, {at}, etc.
+    )
+    
+    foreach ($pattern in $defangPatterns) {
+        if ($url -match $pattern) {
+            return $true
+        }
+    }
+    
+    return $false
+}
+
 # Function to convert defanged URLs to standard format
 function ConvertFrom-DefangedURL {
     param([string]$inputText)
     
     if ([string]::IsNullOrWhiteSpace($inputText)) {
-        [System.Windows.Forms.MessageBox]::Show("Please enter at least one URL.", "Empty Input", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-        return ""
+        [System.Windows.Forms.MessageBox]::Show("Please enter at least one URL.", "Empty Input", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        return $null
     }
     
     try {
@@ -150,6 +175,35 @@ function ConvertFrom-DefangedURL {
             }
         }
         
+        # Filter out empty entries
+        $urls = $urls | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_.Length -gt 0 }
+        
+        # Validate that at least some URLs appear to be defanged
+        $defangedCount = 0
+        foreach ($url in $urls) {
+            if (Test-DefangedURL $url) {
+                $defangedCount++
+            }
+        }
+        
+        # If no defanged URLs detected, show error and return null
+        if ($defangedCount -eq 0) {
+            $message = "No valid defanged URLs detected.`n`n"
+            $message += "Please enter defanged URLs with obfuscation patterns such as:`n"
+            $message += "  • hxxp:// or hxxps:// (instead of http:// or https://)`n"
+            $message += "  • [.] or [dot] (instead of .)`n"
+            $message += "  • [%%] (instead of .)`n"
+            $message += "  • [at] or [@] (instead of @)`n"
+            $message += "  • {.} or similar bracket notation`n`n"
+            $message += "Examples of valid defanged URLs:`n"
+            $message += "  hxxps://example[.]com`n"
+            $message += "  http[:]//domain[.]co[.]uk`n"
+            $message += "  user[@]example[.]com"
+            
+            [System.Windows.Forms.MessageBox]::Show($message, "Invalid Input - No Defanged URLs", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+            return $null
+        }
+        
         # Process each URL: refang and clean
         $processedUrls = $urls | ForEach-Object {
             $_.Trim() `
@@ -168,8 +222,8 @@ function ConvertFrom-DefangedURL {
         return ($processedUrls -join "`r`n")
     }
     catch {
-        [System.Windows.Forms.MessageBox]::Show("Error processing URLs: $($_.Exception.Message)", "Processing Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
-        return ""
+        [System.Windows.Forms.MessageBox]::Show("Error processing URLs: $($_.Exception.Message)", "Processing Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        return $null
     }
 }
 
@@ -179,7 +233,8 @@ $processButton.Add_Click({
         $inputText = $inputTextBox.Text
         $result = ConvertFrom-DefangedURL $inputText
         
-        if ($result) {
+        # Only show success message and update UI if result is not null (processing succeeded)
+        if ($null -ne $result) {
             $outputTextBox.Text = $result
             $urlCount = ($result -split "`r`n" | Where-Object { $_ }).Count
             $copyButton.Enabled = $true
@@ -187,6 +242,7 @@ $processButton.Add_Click({
             $countLabel.Text = "URLs: $urlCount"
             [System.Windows.Forms.MessageBox]::Show("Processed $urlCount URL(s) successfully.", "Success", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
         }
+        # If result is null, the error message was already shown by ConvertFrom-DefangedURL function
     }
     catch {
         [System.Windows.Forms.MessageBox]::Show("An error occurred: $($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
@@ -232,22 +288,6 @@ $exportButton.Add_Click({
     }
     catch {
         [System.Windows.Forms.MessageBox]::Show("Failed to export file: $($_.Exception.Message)", "Export Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
-    }
-})
-
-# Add keyboard shortcut support
-$form.KeyPreview = $true
-$form.Add_KeyDown({
-    param($e)
-    # Ctrl+Enter to process
-    if ($e.Control -and $e.KeyCode -eq [System.Windows.Forms.Keys]::Enter) {
-        $processButton.PerformClick()
-        $e.Handled = $true
-    }
-    # Ctrl+L to clear
-    elseif ($e.Control -and $e.KeyCode -eq [System.Windows.Forms.Keys]::L) {
-        $clearButton.PerformClick()
-        $e.Handled = $true
     }
 })
 

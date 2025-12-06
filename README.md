@@ -350,9 +350,6 @@ The URL processor script (`url-processor.ps1`) is a Windows PowerShell GUI progr
 - **Clipboard Integration**: One-click copy of processed URLs to clipboard
 - **Duplicate Removal**: Automatically removes duplicate URLs from output
 - **URL Counter**: Real-time display of processed URL count
-- **Keyboard Shortcuts**: 
-  - `Ctrl+Enter` to process URLs
-  - `Ctrl+L` to clear all fields
 - **Error Handling**: Comprehensive error handling with user-friendly messages
 - **Professional UI**: Clean layout with separate input/output sections and button panel
 
@@ -384,7 +381,7 @@ Or right-click the file and select "Run with PowerShell"
    - One URL per line
    - Space-separated URLs
    - Brace-wrapped format from security tools
-3. **Click "Process URLs"** or press `Ctrl+Enter`
+3. **Click "Process URLs"**
 4. **Review results** in the bottom output box
 5. **Copy to clipboard** or **Export to file** as needed
 
