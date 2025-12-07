@@ -137,9 +137,14 @@ function Test-DefangedURL {
     
     # Check for common defanging patterns
     $defangPatterns = @(
-        '\[.*\]',          # Square brackets: [.], [at], [dot], etc.
+        '\[\.\]',          # [.] for dot
+        '\[dot\]',         # [dot] for dot
+        '\{\.\}',          # Braces: {.}
+        '\[:\]'          # [:] for colon
+        '\[@\]',           # [@] for at symbol
         'hxxp',            # hxxp:// or hxxps://
-        '\{.*\}'           # Braces: {.}, {at}, etc.
+        '\{.*\}',          # Braces: {.}, {at}, etc.
+        '\[:*\]'           # [:] for colon
     )
     
     foreach ($pattern in $defangPatterns) {
