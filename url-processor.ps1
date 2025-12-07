@@ -2,7 +2,7 @@
 # Author: LaMont Session
 # Description: PowerShell script with GUI to process and refang URLs
 # Created Date: 2025-12-05
-# Last Modified: 2025-12-06
+# Last Modified: 2025-12-07
 
 # Requires PowerShell 5.1 or higher
 #Requires -Version 5.1
@@ -16,14 +16,16 @@ $form.Text = "URL Processor - Refang & Parse"
 $form.Size = New-Object System.Drawing.Size(900, 700)
 $form.StartPosition = "CenterScreen"
 $form.TopMost = $false
-$form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::Fixed3D
-$form.MaximizeBox = $false
+$form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::Sizable
+$form.MaximizeBox = $true
+$form.MinimumSize = New-Object System.Drawing.Size(700, 600)
 
 # Create a panel for input section
 $inputPanel = New-Object System.Windows.Forms.Panel
 $inputPanel.Location = New-Object System.Drawing.Point(10, 10)
 $inputPanel.Size = New-Object System.Drawing.Size(860, 250)
 $inputPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+$inputPanel.Anchor = 'Top, Left, Right'
 $form.Controls.Add($inputPanel)
 
 # Input label
@@ -42,12 +44,14 @@ $inputTextBox.Multiline = $true
 $inputTextBox.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
 $inputTextBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $inputTextBox.WordWrap = $true
+$inputTextBox.Anchor = 'Top, Left, Right'
 $inputPanel.Controls.Add($inputTextBox)
 
 # Create a panel for buttons
 $buttonPanel = New-Object System.Windows.Forms.Panel
 $buttonPanel.Location = New-Object System.Drawing.Point(10, 270)
 $buttonPanel.Size = New-Object System.Drawing.Size(860, 50)
+$buttonPanel.Anchor = 'Top, Left, Right'
 $form.Controls.Add($buttonPanel)
 
 # Process button
@@ -98,6 +102,7 @@ $outputPanel = New-Object System.Windows.Forms.Panel
 $outputPanel.Location = New-Object System.Drawing.Point(10, 330)
 $outputPanel.Size = New-Object System.Drawing.Size(860, 330)
 $outputPanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+$outputPanel.Anchor = 'Top, Left, Right, Bottom'
 $form.Controls.Add($outputPanel)
 
 # Output label
@@ -118,6 +123,7 @@ $outputTextBox.ReadOnly = $true
 $outputTextBox.Font = New-Object System.Drawing.Font("Consolas", 9)
 $outputTextBox.WordWrap = $true
 $outputTextBox.BackColor = [System.Drawing.Color]::WhiteSmoke
+$outputTextBox.Anchor = 'Top, Left, Right, Bottom'
 $outputPanel.Controls.Add($outputTextBox)
 
 # Function to detect if a URL appears to be defanged
@@ -211,6 +217,7 @@ function ConvertFrom-DefangedURL {
                 -replace '\[\.\]', '.' `
                 -replace '\[dot\]', '.' `
                 -replace '\[DOT\]', '.' `
+                -replace '\[:\]', ':' `
                 -replace '\[hxxp', 'http' `
                 -replace 'hxxp://', 'http://' `
                 -replace 'hxxps://', 'https://' `

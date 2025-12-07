@@ -344,7 +344,8 @@ The URL processor script (`url-processor.ps1`) is a Windows PowerShell GUI progr
   - `[.]` → `.`
   - `[dot]` and `[DOT]` → `.`
   - `hxxp://` and `hxxps://` → `http://` and `https://`
-  - `[hxxp` → `http`
+  - `hxxp` → `http`
+  - `[:]` → `:`
   - `[@]` and `[at]` → `@` (for email addresses)
 - **Export Functionality**: Save processed URLs to timestamped text files
 - **Clipboard Integration**: One-click copy of processed URLs to clipboard
