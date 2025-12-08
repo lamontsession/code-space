@@ -5,7 +5,7 @@
 # Last Modified: 2025-12-07
 
 # Requires PowerShell 5.1 or higher
-#Requires -Version 5.1
+# Requires -Version 5.1
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -139,12 +139,13 @@ function Test-DefangedURL {
     $defangPatterns = @(
         '\[\.\]',          # [.] for dot
         '\[dot\]',         # [dot] for dot
-        '\{\.\}',          # Braces: {.}
-        '\[:\]'          # [:] for colon
+        '\{.\}',           # Braces: {.}
+        '\[\:\]',          # [:] for colon
         '\[@\]',           # [@] for at symbol
+        '\[%%\]',          # [%%] for dot
         'hxxp',            # hxxp:// or hxxps://
         '\{.*\}',          # Braces: {.}, {at}, etc.
-        '\[:*\]'           # [:] for colon
+        '\[\*\]'           # [*] for wildcard
     )
     
     foreach ($pattern in $defangPatterns) {
@@ -154,6 +155,27 @@ function Test-DefangedURL {
     }
     
     return $false
+}
+
+# Function to extract URLs from brace notation
+function Extract-URLsFromBraces {
+    param([string]$inputText)
+    
+    $urls = @()
+    
+    # Match pattern: {optional_text | url} or {url}
+    # Handles: {None | https://example.com} or {https://example.com}
+    $bracePattern = '\{([^}]*\|)?([^}]+)\}'
+    $matches = [regex]::Matches($inputText, $bracePattern)
+    
+    foreach ($match in $matches) {
+        $content = $match.Groups[2].Value.Trim()
+        if ($content -and $content.Length -gt 0) {
+            $urls += $content
+        }
+    }
+    
+    return $urls
 }
 
 # Function to convert defanged URLs to standard format
@@ -171,8 +193,8 @@ function ConvertFrom-DefangedURL {
         
         # Check if input looks like the original format with braces
         if ($inputText -match '\{.*\}') {
-            # Original format: {None | url} {None | url}
-            $urls = $inputText -split '\}\s*\{' | ForEach-Object { $_ -replace '^\{|\}$', '' -replace 'None \| ', '' }
+            # Format: {None | url} or {url}
+            $urls = Extract-URLsFromBraces $inputText
         }
         else {
             # Simple format: one URL per line or space-separated
@@ -209,7 +231,8 @@ function ConvertFrom-DefangedURL {
             $message += "Examples of valid defanged URLs:`n"
             $message += "  hxxps://example[.]com`n"
             $message += "  http[:]//domain[.]co[.]uk`n"
-            $message += "  user[@]example[.]com"
+            $message += "  user[@]example[.]com`n"
+            $message += "  https://example[%%]co/path`n"
             
             [System.Windows.Forms.MessageBox]::Show($message, "Invalid Input - No Defanged URLs", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
             return $null
@@ -222,7 +245,7 @@ function ConvertFrom-DefangedURL {
                 -replace '\[\.\]', '.' `
                 -replace '\[dot\]', '.' `
                 -replace '\[DOT\]', '.' `
-                -replace '\[:\]', ':' `
+                -replace '\[\:\]', ':' `
                 -replace '\[hxxp', 'http' `
                 -replace 'hxxp://', 'http://' `
                 -replace 'hxxps://', 'https://' `
