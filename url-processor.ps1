@@ -2,7 +2,8 @@
 # Author: LaMont Session
 # Description: PowerShell script with GUI to process and refang URLs
 # Created Date: 2025-12-05
-# Last Modified: 2025-12-07
+# Last Modified: 2025-12-08
+
 
 # Requires PowerShell 5.1 or higher
 # Requires -Version 5.1
@@ -139,13 +140,14 @@ function Test-DefangedURL {
     $defangPatterns = @(
         '\[\.\]',          # [.] for dot
         '\[dot\]',         # [dot] for dot
+        '\[DOT\]',         # [DOT] for dot
         '\{.\}',           # Braces: {.}
         '\[\:\]',          # [:] for colon
         '\[@\]',           # [@] for at symbol
+        '\[at\]',          # [at] for at symbol
         '\[%%\]',          # [%%] for dot
         'hxxp',            # hxxp:// or hxxps://
-        '\{.*\}',          # Braces: {.}, {at}, etc.
-        '\[\*\]'           # [*] for wildcard
+        '\[\\*\]'          # [*] for wildcard
     )
     
     foreach ($pattern in $defangPatterns) {
@@ -157,25 +159,25 @@ function Test-DefangedURL {
     return $false
 }
 
-# Function to extract URLs from brace notation
-function Extract-URLsFromBraces {
+# Function to parse URLs from brace notation
+function Split-BracedURLs {
     param([string]$inputText)
     
-    $urls = @()
+    $urlCollection = @()
     
     # Match pattern: {optional_text | url} or {url}
     # Handles: {None | https://example.com} or {https://example.com}
     $bracePattern = '\{([^}]*\|)?([^}]+)\}'
-    $matches = [regex]::Matches($inputText, $bracePattern)
+    $regexMatches = [regex]::Matches($inputText, $bracePattern)
     
-    foreach ($match in $matches) {
-        $content = $match.Groups[2].Value.Trim()
-        if ($content -and $content.Length -gt 0) {
-            $urls += $content
+    foreach ($regexMatch in $regexMatches) {
+        $urlContent = $regexMatch.Groups[2].Value.Trim()
+        if ($urlContent -and $urlContent.Length -gt 0) {
+            $urlCollection += $urlContent
         }
     }
     
-    return $urls
+    return $urlCollection
 }
 
 # Function to convert defanged URLs to standard format
@@ -194,7 +196,7 @@ function ConvertFrom-DefangedURL {
         # Check if input looks like the original format with braces
         if ($inputText -match '\{.*\}') {
             # Format: {None | url} or {url}
-            $urls = Extract-URLsFromBraces $inputText
+            $urls = Split-BracedURLs $inputText
         }
         else {
             # Simple format: one URL per line or space-separated
@@ -268,7 +270,7 @@ $processButton.Add_Click({
         $inputText = $inputTextBox.Text
         $result = ConvertFrom-DefangedURL $inputText
         
-        # Only show success message and update UI if result is not null (processing succeeded)
+        # Only show success message and update UI if result is not null
         if ($null -ne $result) {
             $outputTextBox.Text = $result
             $urlCount = ($result -split "`r`n" | Where-Object { $_ }).Count
