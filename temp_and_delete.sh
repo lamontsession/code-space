@@ -2,7 +2,7 @@
 
 # Author: LaMont Session
 # Date Created: 2025-11-30
-# Last Modified: 2025-12-01
+# Last Modified: 2026-01-16
 
 # Description: The script creates a file, copies the ls executable into it, changes the file's permissions, executes it, waits 5 seconds, and then deletes the file.
 
@@ -19,9 +19,6 @@ cd "$SCRIPT_DIR" || exit 1
 
 # Define test file path
 TEST_FILE="$SCRIPT_DIR/test.sh"
-
-# Trap to clean up test file on exit (success or failure)
-trap 'rm -f "$TEST_FILE" 2>/dev/null || true' EXIT
 
 echo "=========================================="
 echo "Making a Temporary File, Executing, and Deleting It"
