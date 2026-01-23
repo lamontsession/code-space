@@ -2,7 +2,7 @@
 
 # Author: LaMont Session
 # Date Created: 2025-11-30
-# Last Modified: 2026-01-22
+# Last Modified: 2026-01-23
 
 # Description: The script creates a file, copies the ls executable into it, changes the file's permissions, executes it, waits 5 seconds, and then deletes the file.
 
@@ -94,7 +94,7 @@ if [[ ! -f "$TEST_FILE" ]]; then
     echo "All alert test steps completed successfully!"
     echo "=========================================="
     echo ""
-    
+
     # Step 7: Delete the script itself
     echo "[Step 7] Deleting the script itself..."
     SCRIPT_PATH="${BASH_SOURCE[0]}"
