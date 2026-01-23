@@ -103,7 +103,7 @@ if [[ ! -f "$TEST_FILE" ]]; then
     rm "$SCRIPT_PATH" || echo "Warning: Failed to delete script" >&2
 else
     echo "=========================================="
-    printf "WARNING: Test file still exists after removal\n" >&2
+    printf "WARNING: Test and script files still exist after removal attempt\n" >&2
     echo "=========================================="
     exit 1
 fi
