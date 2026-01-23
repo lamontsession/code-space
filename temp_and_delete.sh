@@ -2,7 +2,7 @@
 
 # Author: LaMont Session
 # Date Created: 2025-11-30
-# Last Modified: 2026-01-16
+# Last Modified: 2026-01-22
 
 # Description: The script creates a file, copies the ls executable into it, changes the file's permissions, executes it, waits 5 seconds, and then deletes the file.
 
@@ -88,14 +88,22 @@ else
 fi
 echo ""
 
-# Verify file was deleted
+# Step 6.5: Verify test file was deleted
 if [[ ! -f "$TEST_FILE" ]]; then
     echo "=========================================="
-    echo "All steps completed successfully!"
+    echo "All alert test steps completed successfully!"
     echo "=========================================="
+    echo ""
+    
+    # Step 7: Delete the script itself
+    echo "[Step 7] Deleting the script itself..."
+    SCRIPT_PATH="${BASH_SOURCE[0]}"
+    echo "    Removing $SCRIPT_PATH..."
+    echo "    Script deletion initiated."
+    rm "$SCRIPT_PATH" || echo "Warning: Failed to delete script" >&2
 else
     echo "=========================================="
-    printf "WARNING: File still exists after removal\n" >&2
+    printf "WARNING: Test file still exists after removal\n" >&2
     echo "=========================================="
     exit 1
 fi
