@@ -17,21 +17,27 @@ This repository contains the following key files:
 ## IP Lookup Script
 
 ### Description
-The IP lookup script (`iplookup.sh`) retrieves geographical and network information for IP addresses using two services:
+The IP lookup script (`iplookup.sh`) retrieves geographical and network information for IP addresses using five services:
 - IPinfo.io - Provides basic geographical and network information
-- IPQualityScore - Provides additional IP intelligence and threat assessment (optional)
-- GreyNoise - Provides Threat Actor intelligence, internet scanning heuristics, known malicious IP detection.
+- IPQualityScore (IPQS) - Provides additional IP intelligence and threat assessment (optional)
+- MaxMind GeoIP2 - Provides high-accuracy geolocation and network data (optional, requires account)
+- GreyNoise - Provides Threat Actor intelligence, internet scanning heuristics, known malicious IP detection
+- VirusTotal - Provides threat intelligence and malicious IP detection (optional)
 
 ### Features
 - Supports both IPv4 and IPv6 addresses with strict input validation; errors if the format is incorrect.
 - Automatic detection and usage of API tokens for all services from environment variables, ~/.iplookup.conf config file, or interactive input prompt.
 - Interactive prompt mode – run iplookup.sh without arguments to be prompted for an IP address.
-- API calls include a 10-second timeout and error handling for failed requests.
+- Non-interactive mode with `--no-prompt` flag for CI/automation use (prevents hangs on missing tokens).
+- Quiet mode (`-q|--quiet`) to suppress non-error output; useful for scripting and automation.
+- Verbose mode (`-v|--verbose`) for detailed debug output including failure diagnostics.
+- Custom config file support via `-c|--config FILE` to override default `~/.iplookup.conf`.
+- API calls include a 10-second timeout and comprehensive HTTP error handling.
+- Displays actual API error responses (HTTP status codes and server messages) instead of generic curl exit codes.
 - Detection and reporting of rate limiting, empty responses, and failures for each service.
 - Pretty-prints JSON results using jq if installed; otherwise outputs raw JSON.
-- Optional GreyNoise and IPQualityScore lookups (configured independently).
+- All API lookups configured independently and optional.
 - Secure handling of tokens (masked when entering interactively).
-- Displays help message with -h or --help flags.
 - Requires only curl (mandatory) and jq (optional for pretty printing).
 
 ### Prerequisites
@@ -56,54 +62,94 @@ You can configure API tokens in three ways:
 
 1. Environment variables:
 ```bash
-export IPINFO_TOKEN="your_ipinfo_token"  # For IPinfo.io service
-export IPQS_API_KEY="your_ipqs_api_key"  # For IPQualityScore service (optional)
-export GREYNOISE_API_KEY="your_greynoise_key" # GreyNoise (non-key requirement community edition available)
+export IPINFO_TOKEN="your_ipinfo_token"          # For IPinfo.io service
+export IPQS_KEY="your_ipqs_api_key"              # For IPQualityScore service (optional)
+export MAXMIND_ACCOUNT_ID="your_account_id"      # For MaxMind GeoIP2 (optional)
+export MAXMIND_KEY="your_license_key"            # For MaxMind GeoIP2 (optional)
+export GREYNOISE_KEY="your_greynoise_key"        # For GreyNoise service (optional)
+export VIRUSTOTAL_KEY="your_virustotal_key"      # For VirusTotal service (optional)
 ```
 
 2. Configuration file:
 Create `~/.iplookup.conf` with:
 ```bash
-IPINFO_TOKEN="your_ipinfo_token"  # For IPinfo.io service
-IPQS_API_KEY="your_ipqs_api_key"  # For IPQualityScore service (optional)
-GREYNOISE_API_KEY="your_greynoise_key" # For GreyNoise service (non-key requirement community edition available)
+IPINFO_TOKEN="your_ipinfo_token"          # For IPinfo.io service
+IPQS_KEY="your_ipqs_api_key"              # For IPQualityScore service (optional)
+MAXMIND_ACCOUNT_ID="your_account_id"      # For MaxMind GeoIP2 (optional)
+MAXMIND_KEY="your_license_key"            # For MaxMind GeoIP2 (optional)
+GREYNOISE_KEY="your_greynoise_key"        # For GreyNoise service (optional)
+VIRUSTOTAL_KEY="your_virustotal_key"      # For VirusTotal service (optional)
 ```
 
 3. Interactive input:
-If no tokens are found in environment variables or the configuration file, the script will prompt you to enter them manually during execution. You can:
-- Choose to enter an IPinfo.io token
+If no tokens are found in environment variables or the configuration file, the script will prompt you to enter them manually during execution (unless `--no-prompt` is used). You can:
+- Choose to enter an IPinfo.io token (Bearer token authentication)
 - Choose to enter an IPQualityScore API key
-- Choose to enter an GreyNoise API key
+- Choose to enter a VirusTotal API key
+- Choose to enter MaxMind license key and account ID
+- Choose to enter a GreyNoise API key
 - Skip all to use the services without authentication
 
-Note: The script works without API tokens but with rate limitations. Using API tokens provides higher rate limits and additional features. The script will use the first available token it finds in the order: environment variables → configuration file → manual input.
+Note: The script works without API tokens but with rate limitations. Using API tokens provides higher rate limits and additional features. The script will use the first available token it finds in the order: environment variables → configuration file → manual input. For MaxMind, both account ID and license key are required to make authenticated requests.
 
 ### Usage
 ```bash
-./iplookup.sh <IP_ADDRESS>    # Look up specific IP address
-./iplookup.sh                 # Interactive prompt for IP address
-./iplookup.sh -h             # Show help message
-./iplookup.sh --help        # Show help message
+./iplookup.sh <IP_ADDRESS>              # Look up specific IP address
+./iplookup.sh                           # Interactive prompt for IP address
+./iplookup.sh -q                        # Quiet mode (suppress non-error output)
+./iplookup.sh -v                        # Verbose mode (detailed debug output)
+./iplookup.sh -c ~/.custom.conf         # Use alternate config file
+./iplookup.sh --config /path/to/conf    # Use alternate config file (long form)
+./iplookup.sh --no-prompt               # Non-interactive mode (skip token prompts)
+./iplookup.sh -h                        # Show help message
+./iplookup.sh --help                    # Show help message
 ```
 
+### Command-Line Options
+- `-q, --quiet` — Suppress non-error output; useful for scripting and automation
+- `-v, --verbose` — Print verbose debug information including failure reasons
+- `-c, --config FILE` — Specify an alternate configuration file (overrides `~/.iplookup.conf`)
+- `--no-prompt` — Non-interactive mode; do not prompt for missing API tokens (useful in CI/automation)
+- `-h, --help` — Display help message and exit
+
 ### Output Format
-The script provides:
-1. IPinfo.io results showing:
+The script queries multiple services in order and displays results for each. All results are formatted as JSON (pretty-printed if `jq` is installed):
+
+1. **IPinfo.io** (always queried):
    - Geographical location (city, region, country)
    - Network information (ASN, organization)
    - Coordinates (latitude/longitude)
+   - IPinfo Bearer token authentication (if provided)
 
-2. IPQualityScore results (if API key provided) showing:
+2. **IPQualityScore (IPQS)** (if API key provided):
    - Fraud score and risk assessment
    - VPN/Proxy detection
    - Additional threat intelligence
+   - Optional; skipped if no API key configured
 
-3. GreyNoise results showing (both via API key and free community API(50 searches per week limit)):
-   - Geographical location (city, region, country)
-   - Behavioral intelligence
-   - Threat intelligence
+3. **MaxMind GeoIP2** (if account ID and license key provided):
+   - High-accuracy geolocation data
+   - Network information (organization, ISP)
+   - Security data (proxy detection, VPN, etc.)
+   - HTTP Basic Auth with account ID and license key
+   - Optional; requires both account ID and license key
 
-Results are formatted as pretty-printed JSON when `jq` is installed, or raw JSON otherwise.
+4. **GreyNoise** (with API key or free community API):
+   - Threat Actor intelligence
+   - Known malicious IP detection
+   - Internet scanning behavior analysis
+   - Supports authenticated API (with key) and free community API (50 searches/week limit)
+   - Falls back to community API if token-based query fails
+
+5. **VirusTotal** (if API key provided):
+   - Threat intelligence from multiple AV vendors
+   - Known malicious activity detection
+   - x-apikey header authentication
+   - Optional; queried last after all other services
+
+**Error Handling**: If any API query fails, the actual HTTP status code and server error message are displayed (e.g., "Error: HTTP 403 - Unauthorized") instead of generic curl exit codes, making diagnosis straightforward.
+
+All results are displayed as JSON. When `jq` is installed, results are pretty-printed for readability; otherwise, raw JSON is displayed.
 
 ## Archive and Delete Script
 
@@ -566,4 +612,4 @@ LaMont Session
 
 ## Last Updated
 
-2026-01-02
+2026-01-28
