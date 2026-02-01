@@ -17,10 +17,9 @@ This repository contains the following key files:
 ## IP Lookup Script
 
 ### Description
-The IP lookup script (`iplookup.sh`) retrieves geographical and network information for IP addresses using five services:
+The IP lookup script (`iplookup.sh`) retrieves geographical and network information for IP addresses using four services:
 - IPinfo.io - Provides basic geographical and network information
 - IPQualityScore (IPQS) - Provides additional IP intelligence and threat assessment (optional)
-- MaxMind GeoIP2 - Provides high-accuracy geolocation and network data (optional, requires account)
 - GreyNoise - Provides Threat Actor intelligence, internet scanning heuristics, known malicious IP detection
 - VirusTotal - Provides threat intelligence and malicious IP detection (optional)
 
@@ -64,8 +63,6 @@ You can configure API tokens in three ways:
 ```bash
 export IPINFO_TOKEN="your_ipinfo_token"          # For IPinfo.io service
 export IPQS_KEY="your_ipqs_api_key"              # For IPQualityScore service (optional)
-export MAXMIND_ACCOUNT_ID="your_account_id"      # For MaxMind GeoIP2 (optional)
-export MAXMIND_KEY="your_license_key"            # For MaxMind GeoIP2 (optional)
 export GREYNOISE_KEY="your_greynoise_key"        # For GreyNoise service (optional)
 export VIRUSTOTAL_KEY="your_virustotal_key"      # For VirusTotal service (optional)
 ```
@@ -75,8 +72,6 @@ Create `~/.iplookup.conf` with:
 ```bash
 IPINFO_TOKEN="your_ipinfo_token"          # For IPinfo.io service
 IPQS_KEY="your_ipqs_api_key"              # For IPQualityScore service (optional)
-MAXMIND_ACCOUNT_ID="your_account_id"      # For MaxMind GeoIP2 (optional)
-MAXMIND_KEY="your_license_key"            # For MaxMind GeoIP2 (optional)
 GREYNOISE_KEY="your_greynoise_key"        # For GreyNoise service (optional)
 VIRUSTOTAL_KEY="your_virustotal_key"      # For VirusTotal service (optional)
 ```
@@ -86,11 +81,10 @@ If no tokens are found in environment variables or the configuration file, the s
 - Choose to enter an IPinfo.io token (Bearer token authentication)
 - Choose to enter an IPQualityScore API key
 - Choose to enter a VirusTotal API key
-- Choose to enter MaxMind license key and account ID
 - Choose to enter a GreyNoise API key
 - Skip all to use the services without authentication
 
-Note: The script works without API tokens but with rate limitations. Using API tokens provides higher rate limits and additional features. The script will use the first available token it finds in the order: environment variables → configuration file → manual input. For MaxMind, both account ID and license key are required to make authenticated requests.
+Note: The script works without API tokens but with rate limitations. Using API tokens provides higher rate limits and additional features. The script will use the first available token it finds in the order: environment variables → configuration file → manual input.
 
 ### Usage
 ```bash
@@ -127,21 +121,14 @@ The script queries multiple services in order and displays results for each. All
    - Additional threat intelligence
    - Optional; skipped if no API key configured
 
-3. **MaxMind GeoIP2** (if account ID and license key provided):
-   - High-accuracy geolocation data
-   - Network information (organization, ISP)
-   - Security data (proxy detection, VPN, etc.)
-   - HTTP Basic Auth with account ID and license key
-   - Optional; requires both account ID and license key
-
-4. **GreyNoise** (with API key or free community API):
+3. **GreyNoise** (with API key or free community API):
    - Threat Actor intelligence
    - Known malicious IP detection
    - Internet scanning behavior analysis
    - Supports authenticated API (with key) and free community API (50 searches/week limit)
    - Falls back to community API if token-based query fails
 
-5. **VirusTotal** (if API key provided):
+4. **VirusTotal** (if API key provided):
    - Threat intelligence from multiple AV vendors
    - Known malicious activity detection
    - x-apikey header authentication
@@ -612,4 +599,4 @@ LaMont Session
 
 ## Last Updated
 
-2026-01-28
+2026-02-01

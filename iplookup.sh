@@ -2,7 +2,7 @@
 
 # Author: LaMont Session
 # Date Created: 2025-10-28
-# Last Modified: 2025-01-28
+# Last Modified: 2025-02-01
 
 # Description:
 # This is an ip lookup script that retrieves geographical and network information for a given IP address.
@@ -153,22 +153,6 @@ prompt_for_tokens() {
         fi
     fi
 
-    # Check for MaxMind license key
-    if [[ -z "${MAXMIND_KEY:-}" ]]; then
-        read -p "Would you like to enter a MaxMind license key? (y/n): " use_mm
-        if [[ "$use_mm" == "y" || "$use_mm" == "Y" ]]; then
-            read -rs -p "Enter your MaxMind license key: " MAXMIND_KEY
-            MAXMIND_KEY=$(trim_whitespace "$MAXMIND_KEY")
-            echo
-        fi
-    fi
-
-    # Check for MaxMind account ID
-    if [[ -z "${MAXMIND_ACCOUNT_ID:-}" ]] && [[ -n "${MAXMIND_KEY:-}" ]]; then
-        read -p "Enter your MaxMind account ID: " MAXMIND_ACCOUNT_ID
-        MAXMIND_ACCOUNT_ID=$(trim_whitespace "$MAXMIND_ACCOUNT_ID")
-    fi
-
     # Check for GreyNoise key
     if [[ -z "${GREYNOISE_KEY:-}" ]]; then
         read -p "Would you like to enter a GreyNoise API key? (y/n): " use_gn
@@ -183,8 +167,6 @@ prompt_for_tokens() {
 # Use API tokens from config file or environment variables
 IPINFO_TOKEN=${IPINFO_TOKEN:-${TOKEN:-}}
 IPQS_KEY=${IPQS_KEY:-${IPQS_API_KEY:-}}
-MAXMIND_KEY=${MAXMIND_KEY:-${MAXMIND_LICENSE_KEY:-}}
-MAXMIND_ACCOUNT_ID=${MAXMIND_ACCOUNT_ID:-${MAXMIND_ID:-}}
 GREYNOISE_KEY=${GREYNOISE_KEY:-${GREYNOISE_API_KEY:-}}
 VIRUSTOTAL_KEY=${VIRUSTOTAL_KEY:-${VIRUSTOTAL_API_KEY:-}}
 
@@ -212,46 +194,6 @@ format_json_response() {
     else
         printf "%s\n" "$response"
     fi
-}
-
-# Function to call MaxMind API with account ID and license key
-call_api_maxmind() {
-    local url=$1
-    local account_id=$2
-    local license_key=$3
-    local response
-    local http_code
-    local exit_code
-
-    # Capture response and HTTP status code separately
-    response=$(curl -sS --max-time 10 --request GET --url "$url" \
-            --user "$account_id:$license_key" \
-            --header "accept: application/json" \
-            -w "\n%{http_code}" 2>&1) || exit_code=$?
-    exit_code=${exit_code:-0}
-
-    if [[ $exit_code -ne 0 ]]; then
-        printf "Error: curl failed (exit code: %s)\n" "$exit_code" >&2
-        printf "%s\n" "$response"
-        return 1
-    fi
-
-    # Extract HTTP code (last line) and body (everything else)
-    http_code=$(printf "%s" "$response" | tail -n1)
-    response=$(printf "%s" "$response" | sed '$d')
-
-    # Check HTTP status
-    if [[ $http_code -ge 400 ]]; then
-        printf "Error: HTTP %s - %s\n" "$http_code" "$response" >&2
-        return 1
-    fi
-
-    if [[ -z "${response:-}" ]]; then
-        printf "Warning: Empty response received from %s\n" "$url"
-        return 1
-    fi
-
-    format_json_response "$response"
 }
 
 # Function to call API with header authentication
@@ -350,27 +292,6 @@ if [[ -n "$IPQS_KEY" ]]; then
 else
     if [[ ${QUIET:-0} -eq 0 ]]; then
         echo "IPQualityScore API key not provided. Skipping IPQS lookup."
-    fi
-fi
-
-# MaxMind GeoIP2 lookup if license key and account ID provided
-if [[ -n "$MAXMIND_KEY" ]] && [[ -n "$MAXMIND_ACCOUNT_ID" ]]; then
-    MAXMIND_URL="https://geoip.maxmind.com/geoip/v2.1/city/$ip_address"
-    printf "\n--- MaxMind GeoIP2 Results ---\n"
-    if ! call_api_maxmind "$MAXMIND_URL" "$MAXMIND_ACCOUNT_ID" "$MAXMIND_KEY"; then
-        if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
-            printf "(verbose) Failed to retrieve MaxMind data\n" >&2
-        fi
-    fi
-else
-    if [[ -n "$MAXMIND_KEY" ]] && [[ -z "$MAXMIND_ACCOUNT_ID" ]]; then
-        if [[ ${QUIET:-0} -eq 0 ]]; then
-            echo "MaxMind account ID not provided. Skipping MaxMind lookup."
-        fi
-    elif [[ -z "$MAXMIND_KEY" ]]; then
-        if [[ ${QUIET:-0} -eq 0 ]]; then
-            echo "MaxMind license key not provided. Skipping MaxMind lookup."
-        fi
     fi
 fi
 
