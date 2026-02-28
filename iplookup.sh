@@ -5,7 +5,7 @@
 # Last Modified: 2025-02-28
 
 # Description:
-# This is an ip lookup script that retrieves geographical and network information for a given IP address.
+# This is an ip lookup script that retrieves geographical, threat intelligence, and network information for a given IP address.
 
 # Usage:
 # iplookup
@@ -14,11 +14,12 @@
 # Fail on error, undefined var, and fail pipeline on first failing command
 set -u # Treat unset variables as an error
 set -o pipefail # Return the exit status of the first failed command in a pipeline
+set -e # Exit immediately if a command exits with a non-zero status
 
 # Function to show help message
 show_help() {
 echo "Usage: $(basename "$0") "
-echo "Retrieve geographical and network information for a given IP address."
+echo "# This is an ip lookup script that retrieves geographical, threat intelligence, and network information for a given IP address."
 echo ""
 echo "Options:"
 echo " -q, --quiet Suppress non-error output"
@@ -296,7 +297,57 @@ fi
 format_json_response "$response"
 }
 
+# Function to call Shodan InternetDB (public, no auth required)
+call_shodan_internetdb() {
+local ip=$1
+local url="https://internetdb.shodan.io/$ip"
+local response
+local http_code
+local exit_code
+
+response=$(curl -sS --max-time 10 --request GET "$url" \
+--header "accept: application/json" \
+-w "\n%{http_code}" 2>&1) || exit_code=$?
+exit_code=${exit_code:-0}
+
+if [[ $exit_code -ne 0 ]]; then
+printf "Error: curl failed (exit code: %s)\n" "$exit_code" >&2
+printf "%s\n" "$response"
+return 1
+fi
+
+http_code=$(printf "%s" "$response" | tail -n1)
+response=$(printf "%s" "$response" | sed '$d')
+
+# 404 means Shodan has no data for this IP — not a hard error
+if [[ $http_code -eq 404 ]]; then
+printf "No Shodan InternetDB data found for %s\n" "$ip"
+return 0
+fi
+
+if [[ $http_code -ge 400 ]]; then
+printf "Error: HTTP %s - %s\n" "$http_code" "$response" >&2
+return 1
+fi
+
+if [[ -z "${response:-}" ]]; then
+printf "Warning: Empty response received from Shodan InternetDB\n"
+return 1
+fi
+
+format_json_response "$response"
+}
+
 # Output results
+# Shodan InternetDB lookup (no API key required)
+printf "\n--- Shodan InternetDB Results ---\n"
+if ! call_shodan_internetdb "$ip_address"; then
+if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
+printf "(verbose) Failed to retrieve Shodan InternetDB data\n" >&2
+fi
+fi
+
+# IPinfo lookup results
 printf "\n--- IPinfo Results ---\n"
 if [[ -n "$IPINFO_TOKEN" ]]; then
 call_api_with_header_auth "$IPINFO_URL" "Authorization" "Bearer $IPINFO_TOKEN" || true
