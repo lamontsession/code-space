@@ -21,7 +21,7 @@ The IP lookup script (`iplookup.sh`) retrieves geographical and network informat
 - IPinfo.io - Provides basic geographical and network information
 - IPQualityScore (IPQS) - Provides additional IP intelligence and threat assessment (optional)
 - GreyNoise - Provides Threat Actor intelligence, internet scanning heuristics, known malicious IP detection
-- VirusTotal - Provides threat intelligence and malicious IP detection (optional)
+- APIVoid - Provides threat intelligence and malicious IP detection (optional)
 
 ### Features
 - Supports both IPv4 and IPv6 addresses with strict input validation; errors if the format is incorrect.
@@ -64,7 +64,7 @@ You can configure API tokens in three ways:
 export IPINFO_TOKEN="your_ipinfo_token"          # For IPinfo.io service
 export IPQS_KEY="your_ipqs_api_key"              # For IPQualityScore service (optional)
 export GREYNOISE_KEY="your_greynoise_key"        # For GreyNoise service (optional)
-export VIRUSTOTAL_KEY="your_virustotal_key"      # For VirusTotal service (optional)
+export APIVOID_KEY="your_apivoid_key"      # For APIVoid service (optional)
 ```
 
 2. Configuration file:
@@ -73,14 +73,14 @@ Create `~/.iplookup.conf` with:
 IPINFO_TOKEN="your_ipinfo_token"          # For IPinfo.io service
 IPQS_KEY="your_ipqs_api_key"              # For IPQualityScore service (optional)
 GREYNOISE_KEY="your_greynoise_key"        # For GreyNoise service (optional)
-VIRUSTOTAL_KEY="your_virustotal_key"      # For VirusTotal service (optional)
+APIVOID_KEY="your_apivoid_key"      # For APIVoid service (optional)
 ```
 
 3. Interactive input:
 If no tokens are found in environment variables or the configuration file, the script will prompt you to enter them manually during execution (unless `--no-prompt` is used). You can:
 - Choose to enter an IPinfo.io token (Bearer token authentication)
 - Choose to enter an IPQualityScore API key
-- Choose to enter a VirusTotal API key
+- Choose to enter a APIVoid API key
 - Choose to enter a GreyNoise API key
 - Skip all to use the services without authentication
 
@@ -128,9 +128,8 @@ The script queries multiple services in order and displays results for each. All
    - Supports authenticated API (with key) and free community API (50 searches/week limit)
    - Falls back to community API if token-based query fails
 
-4. **VirusTotal** (if API key provided):
-   - Threat intelligence from multiple AV vendors
-   - Known malicious activity detection
+4. **APIVoid** (if API key provided):
+   - Threat intelligence from multiple vendors
    - x-apikey header authentication
    - Optional; queried last after all other services
 
@@ -599,4 +598,4 @@ LaMont Session
 
 ## Last Updated
 
-2026-02-01
+2026-02-28
