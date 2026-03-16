@@ -2,7 +2,7 @@
 
 # Author: LaMont Session
 # Date Created: 2025-10-28
-# Last Modified: 2025-02-28
+# Last Modified: 2025-03-16
 
 # Description:
 # This is an ip lookup script that retrieves geographical, threat intelligence, and network information for a given IP address.
@@ -12,9 +12,9 @@
 # iplookup -h|--help Show this help message
 
 # Fail on error, undefined var, and fail pipeline on first failing command
+set -e # Exit immediately if a command exits with a non-zero status
 set -u # Treat unset variables as an error
 set -o pipefail # Return the exit status of the first failed command in a pipeline
-set -e # Exit immediately if a command exits with a non-zero status
 
 # Function to show help message
 show_help() {
@@ -105,7 +105,10 @@ fi
 fi
 
 # Validate IP address format (IPv4 and IPv6)
-if ! [[ "$ip_address" =~ ^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$ || "$ip_address" =~ ^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$ ]]; then
+ipv4_regex='^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$'
+ipv6_regex='^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$'
+
+if ! [[ "$ip_address" =~ $ipv4_regex ]] && ! [[ "$ip_address" =~ $ipv6_regex ]]; then
 echo "Error: Invalid IP address format."
 exit 1
 fi
@@ -161,7 +164,7 @@ fi
 }
 
 # Use API tokens from config file or environment variables
-IPINFO_TOKEN=${IPINFO_TOKEN:-${TOKEN:-}}
+IPINFO_TOKEN=${IPINFO_TOKEN:-}
 IPQS_KEY=${IPQS_KEY:-${IPQS_API_KEY:-}}
 GREYNOISE_KEY=${GREYNOISE_KEY:-${GREYNOISE_API_KEY:-}}
 APIVOID_KEY=${APIVOID_KEY:-${APIVOID_API_KEY:-}}
@@ -170,11 +173,7 @@ APIVOID_KEY=${APIVOID_KEY:-${APIVOID_API_KEY:-}}
 prompt_for_tokens
 
 # Set up IPinfo URL (token will be passed via header when available)
-if [[ -n "$IPINFO_TOKEN" ]]; then
-IPINFO_URL="https://api.ipinfo.io/lite/$ip_address"
-else
 IPINFO_URL="https://ipinfo.io/$ip_address"
-fi
 
 # Function to validate and format JSON response
 format_json_response() {
@@ -261,40 +260,84 @@ format_json_response "$response"
 
 # Function to call APIVoid IP Reputation (POST with JSON body)
 call_apivoid_ip_reputation() {
-local api_key=$1
-local ip=$2
-local url="https://api.apivoid.com/v2/ip-reputation"
-local response
-local http_code
-local exit_code
+  local api_key=$1
+  local ip=$2
+  local url="https://api.apivoid.com/v2/ip-reputation"
+  local response
+  local http_code
+  local exit_code
 
-response=$(curl -sS --max-time 10 --request POST "$url" \
---header "Content-Type: application/json" \
---header "X-API-Key: $api_key" \
---data "{\"ip\": \"$ip\"}" \
--w "\n%{http_code}" 2>&1) || exit_code=$?
-exit_code=${exit_code:-0}
+  response=$(curl -sS --max-time 10 --request POST "$url" \
+    --header "Content-Type: application/json" \
+    --header "X-API-Key: $api_key" \
+    --data "{\"ip\": \"$ip\"}" \
+    -w "\n%{http_code}" 2>&1) || exit_code=$?
+  exit_code=${exit_code:-0}
 
-if [[ $exit_code -ne 0 ]]; then
-printf "Error: curl failed (exit code: %s)\n" "$exit_code" >&2
-printf "%s\n" "$response"
-return 1
-fi
+  if [[ $exit_code -ne 0 ]]; then
+    printf "Error: curl failed (exit code: %s)\n" "$exit_code" >&2
+    printf "%s\n" "$response" >&2
+    return 1
+  fi
 
-http_code=$(printf "%s" "$response" | tail -n1)
-response=$(printf "%s" "$response" | sed '$d')
+  http_code=$(printf "%s" "$response" | tail -n1)
+  response=$(printf "%s" "$response" | sed '$d')
 
-if [[ $http_code -ge 400 ]]; then
-printf "Error: HTTP %s - %s\n" "$http_code" "$response" >&2
-return 1
-fi
+  if [[ $http_code -ge 400 ]]; then
+    printf "Error: HTTP %s - %s\n" "$http_code" "$response" >&2
+    return 1
+  fi
 
-if [[ -z "${response:-}" ]]; then
-printf "Warning: Empty response received from APIVoid\n"
-return 1
-fi
+  if [[ -z "${response:-}" ]]; then
+    printf "Warning: Empty response received from APIVoid\n" >&2
+    return 1
+  fi
 
-format_json_response "$response"
+  # Require jq for summary filtering
+  if ! command -v jq >/dev/null 2>&1; then
+    printf "Warning: 'jq' not found — displaying raw APIVoid response.\n"
+    printf "%s\n" "$response"
+    return 0
+  fi
+  # High-level positives
+  local detections is_vpn is_proxy
+  detections=$(printf "%s\n" "$response" | jq -r '.data.blacklists.detections // .blacklists.detections // 0' 2>/dev/null)
+  is_vpn=$(printf "%s\n" "$response" | jq -r '.data.information.is_vpn // false' 2>/dev/null)
+  is_proxy=$(printf "%s\n" "$response" | jq -r '.data.information.is_proxy // false' 2>/dev/null)
+
+  [[ "$is_vpn" == "true" || "$is_vpn" == "1" ]] && is_vpn=1 || is_vpn=0
+  [[ "$is_proxy" == "true" || "$is_proxy" == "1" ]] && is_proxy=1 || is_proxy=0
+
+  # Compact list of only detected blacklist engines
+  local engines_output
+  engines_output=$(printf "%s\n" "$response" | jq -r '
+    .data.blacklists.engines // .blacklists.engines // {}
+    | to_entries
+    | map(select(.value.detected == true))
+    | .[]
+    | "- Engine: \(.key), category: \(.value.category // "n/a"), reference: \(.value.reference // "n/a")"
+  ' 2>/dev/null || true)
+
+  # Decide if we have anything "positive" to show
+  if [[ "${detections:-0}" -gt 0 || "$is_vpn" -eq 1 || "$is_proxy" -eq 1 || -n "$engines_output" ]]; then
+    # Print a compact summary (caller prints the header)
+    if [[ "${detections:-0}" -gt 0 ]]; then
+      printf "APIVoid: blacklist detections: %s\n" "$detections"
+    fi
+    if [[ "$is_vpn" -eq 1 ]]; then
+      printf "APIVoid: IP flagged as VPN\n"
+    fi
+    if [[ "$is_proxy" -eq 1 ]]; then
+      printf "APIVoid: IP flagged as proxy\n"
+    fi
+    if [[ -n "$engines_output" ]]; then
+      printf "APIVoid detected engines:\n%s\n" "$engines_output"
+    fi
+  else
+    printf "No detections found for %s in APIVoid\n" "$ip"
+  fi
+
+  return 0
 }
 
 # Function to call Shodan InternetDB (public, no auth required)
@@ -374,7 +417,7 @@ fi
 if [[ -n "$GREYNOISE_KEY" ]]; then
 GREYNOISE_URL="https://api.greynoise.io/v3/ip/$ip_address"
 printf "\n--- GreyNoise Results ---\n"
-if ! call_api_with_header_auth "$GREYNOISE_URL" "key" "$GREYNOISE_KEY"; then
+if ! call_api_with_header_auth "$GREYNOISE_URL" "X-API-Key" "$GREYNOISE_KEY"; then
 if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
 printf "(verbose) Failed to retrieve GreyNoise data with token, falling back to community results...\n" >&2
 else
@@ -397,16 +440,16 @@ fi
 
 # APIVoid IP Reputation lookup
 if [[ -n "$APIVOID_KEY" ]]; then
-printf "\n--- APIVoid IP Reputation Results ---\n"
-if ! call_apivoid_ip_reputation "$APIVOID_KEY" "$ip_address"; then
-if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
-printf "(verbose) Failed to retrieve APIVoid data\n" >&2
-fi
-fi
+  printf "\n--- APIVoid IP Reputation Results ---\n"
+  call_apivoid_ip_reputation "$APIVOID_KEY" "$ip_address" || {
+    if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
+      printf "(verbose) Failed to retrieve APIVoid data\n" >&2
+    fi
+  }
 else
-if [[ ${QUIET:-0} -eq 0 ]]; then
-echo "APIVoid API key not provided. Skipping APIVoid lookup."
-fi
+  if [[ ${QUIET:-0} -eq 0 ]]; then
+    echo "APIVoid API key not provided. Skipping APIVoid lookup."
+  fi
 fi
 
 # Final message displayed to screen
