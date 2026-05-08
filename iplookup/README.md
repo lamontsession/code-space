@@ -5,12 +5,13 @@ The IP lookup script (`iplookup.sh` / `iplookup_improved.sh`) retrieves geograph
 - **IPinfo.io** - Provides basic geographical and network information
 - **IPQualityScore (IPQS)** - Provides additional IP intelligence and threat assessment (optional)
 - **GreyNoise** - Provides Threat Actor intelligence, internet scanning heuristics, known malicious IP detection
-- **APIVoid** - Provides threat intelligence and malicious IP detection (optional)
+- **OpenSourceMalware (OSM)** - Provides community threat reputation and malicious IP checks (optional)
+- **Pulsedive** - Provides threat intelligence indicator lookup with optional unauthenticated access
 - **Shodan InternetDB** - Provides service/port information and open port enumeration (public, no auth required)
 
 ### Features
 - Supports both IPv4 and IPv6 addresses with robust input validation using `python3 inet_pton` (fallback regex available)
-- Automatic detection and usage of API tokens for all services from environment variables, `~/.iplookup.conf` config file, or interactive input prompt
+- Automatic detection and usage of API tokens for supported services from environment variables, `~/.iplookup.conf` config file, or interactive input prompt
 - Interactive prompt mode – run `iplookup.sh` without arguments to be prompted for an IP address
 - Non-interactive mode with `--no-prompt` flag for CI/automation use (prevents hangs on missing tokens)
 - Quiet mode (`-q|--quiet`) to suppress non-error output; useful for scripting and automation
@@ -74,7 +75,8 @@ You can configure API tokens in three ways:
 export IPINFO_TOKEN="your_ipinfo_token"          # For IPinfo.io service
 export IPQS_KEY="your_ipqs_api_key"              # For IPQualityScore service (optional)
 export GREYNOISE_KEY="your_greynoise_key"        # For GreyNoise service (optional)
-export APIVOID_KEY="your_apivoid_key"            # For APIVoid service (optional)
+export OSM_KEY="your_osm_api_key"                # For OpenSourceMalware service (optional)
+export PULSEDIVE_KEY="your_pulsedive_api_key"    # For Pulsedive service (optional)
 ```
 
 2. Configuration file:
@@ -83,14 +85,15 @@ Create `~/.iplookup.conf` with:
 IPINFO_TOKEN="your_ipinfo_token"          # For IPinfo.io service
 IPQS_KEY="your_ipqs_api_key"              # For IPQualityScore service (optional)
 GREYNOISE_KEY="your_greynoise_key"        # For GreyNoise service (optional)
-APIVOID_KEY="your_apivoid_key"            # For APIVoid service (optional)
+OSM_KEY="your_osm_api_key"                # For OpenSourceMalware service (optional)
+PULSEDIVE_KEY="your_pulsedive_api_key"    # For Pulsedive service (optional)
 ```
 
 3. Interactive input:
 If no tokens are found in environment variables or the configuration file, the script will prompt you to enter them manually during execution (unless `--no-prompt` is used). You can:
 - Choose to enter an IPinfo.io token (Bearer token authentication)
 - Choose to enter an IPQualityScore API key
-- Choose to enter an APIVoid API key
+- Choose to enter an OpenSourceMalware (OSM) API key
 - Choose to enter a GreyNoise API key
 - Skip all to use the services without authentication
 
@@ -148,10 +151,15 @@ The script queries multiple services in order and displays results for each. All
    - Supports authenticated API (with key) and free community API (50 searches/week limit)
    - Falls back to community API if token-based query fails (HTTP 404)
 
-5. **APIVoid** (if API key provided):
-   - Threat intelligence from multiple vendors
-   - x-apikey header authentication
-   - Optional; queried last after all other services
+5. **OpenSourceMalware (OSM)** (if API key provided):
+   - Community threat reputation and malicious IP checks
+   - Bearer token authentication
+   - Optional; queried after GreyNoise
+
+6. **Pulsedive** (always attempted, with or without key):
+   - Indicator lookup for IP addresses
+   - Optional authenticated lookup, with unauthenticated fallback
+   - Provides additional threat intelligence and context
 
 **Error Handling**: If any API query fails, the actual HTTP status code and server error message are displayed (e.g., "Error: HTTP 403 from https://api.example.com - Unauthorized") instead of generic curl exit codes, making diagnosis straightforward. Transient errors (429, 5xx) are automatically retried with exponential backoff.
 
@@ -187,4 +195,4 @@ LaMont Session
 
 ## Last Updated
 
-2026-03-07
+2026-05-08

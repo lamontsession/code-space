@@ -2,7 +2,7 @@
 
 # Author: LaMont Session
 # Date Created: 2025-10-28
-# Last Modified: 2025-03-16
+# Last Modified: 2026-05-08
 
 # Description:
 # This is an ip lookup script that retrieves geographical, threat intelligence, and network information for a given IP address.
@@ -142,12 +142,12 @@ echo
 fi
 fi
 
-# Check for APIVoid key
-if [[ -z "${APIVOID_KEY:-}" ]]; then
-read -p "Would you like to enter an APIVoid API key? (y/n): " use_apivoid
-if [[ "$use_apivoid" == "y" || "$use_apivoid" == "Y" ]]; then
-read -rs -p "Enter your APIVoid API key: " APIVOID_KEY
-APIVOID_KEY=$(trim_whitespace "$APIVOID_KEY")
+# Check for OSM key
+if [[ -z "${OSM_KEY:-}" ]]; then
+read -p "Would you like to enter an OSM API key? (y/n): " use_osm
+if [[ "$use_osm" == "y" || "$use_osm" == "Y" ]]; then
+read -rs -p "Enter your OSM API key: " OSM_KEY
+OSM_KEY=$(trim_whitespace "$OSM_KEY")
 echo
 fi
 fi
@@ -161,13 +161,17 @@ GREYNOISE_KEY=$(trim_whitespace "$GREYNOISE_KEY")
 echo
 fi
 fi
+
+# NOTE: Pulsedive is optional and should work unauthenticated,
+# so we do NOT prompt for PULSEDIVE_KEY here. It is used if present.
 }
 
 # Use API tokens from config file or environment variables
 IPINFO_TOKEN=${IPINFO_TOKEN:-}
 IPQS_KEY=${IPQS_KEY:-${IPQS_API_KEY:-}}
 GREYNOISE_KEY=${GREYNOISE_KEY:-${GREYNOISE_API_KEY:-}}
-APIVOID_KEY=${APIVOID_KEY:-${APIVOID_API_KEY:-}}
+OSM_KEY=${OSM_KEY:-${OSM_API_KEY:-}}
+PULSEDIVE_KEY=${PULSEDIVE_KEY:-${PULSEDIVE_API_KEY:-}}
 
 # Prompt for tokens if not found in environment or config
 prompt_for_tokens
@@ -258,86 +262,95 @@ fi
 format_json_response "$response"
 }
 
-# Function to call APIVoid IP Reputation (POST with JSON body)
-call_apivoid_ip_reputation() {
-  local api_key=$1
-  local ip=$2
-  local url="https://api.apivoid.com/v2/ip-reputation"
-  local response
-  local http_code
-  local exit_code
+# Function to call OpenSourceMalware Community Threat Database IP lookup (GET)
+call_osm_ip_reputation() {
+local api_key=$1
+local ip=$2
+local url="https://api.opensourcemalware.com/functions/v1/check-malicious?report_type=ip&resource_identifier=$ip"
+local response
+local http_code
+local exit_code
 
-  response=$(curl -sS --max-time 10 --request POST "$url" \
-    --header "Content-Type: application/json" \
-    --header "X-API-Key: $api_key" \
-    --data "{\"ip\": \"$ip\"}" \
-    -w "\n%{http_code}" 2>&1) || exit_code=$?
-  exit_code=${exit_code:-0}
+response=$(curl -sS --max-time 10 --request GET "$url" \
+--header "accept: application/json" \
+--header "Authorization: Bearer $api_key" \
+-w "\n%{http_code}" 2>&1) || exit_code=$?
+exit_code=${exit_code:-0}
 
-  if [[ $exit_code -ne 0 ]]; then
-    printf "Error: curl failed (exit code: %s)\n" "$exit_code" >&2
-    printf "%s\n" "$response" >&2
-    return 1
-  fi
+if [[ $exit_code -ne 0 ]]; then
+printf "Error: curl failed (exit code: %s)\n" "$exit_code" >&2
+printf "%s\n" "$response" >&2
+return 1
+fi
 
-  http_code=$(printf "%s" "$response" | tail -n1)
-  response=$(printf "%s" "$response" | sed '$d')
+http_code=$(printf "%s" "$response" | tail -n1)
+response=$(printf "%s" "$response" | sed '$d')
 
-  if [[ $http_code -ge 400 ]]; then
-    printf "Error: HTTP %s - %s\n" "$http_code" "$response" >&2
-    return 1
-  fi
+if [[ $http_code -ge 400 ]]; then
+printf "Error: HTTP %s - %s\n" "$http_code" "$response" >&2
+return 1
+fi
 
-  if [[ -z "${response:-}" ]]; then
-    printf "Warning: Empty response received from APIVoid\n" >&2
-    return 1
-  fi
+if [[ -z "${response:-}" ]]; then
+printf "Warning: Empty response received from OpenSourceMalware\n" >&2
+return 1
+fi
 
-  # Require jq for summary filtering
-  if ! command -v jq >/dev/null 2>&1; then
-    printf "Warning: 'jq' not found — displaying raw APIVoid response.\n"
-    printf "%s\n" "$response"
-    return 0
-  fi
-  # High-level positives
-  local detections is_vpn is_proxy
-  detections=$(printf "%s\n" "$response" | jq -r '.data.blacklists.detections // .blacklists.detections // 0' 2>/dev/null)
-  is_vpn=$(printf "%s\n" "$response" | jq -r '.data.information.is_vpn // false' 2>/dev/null)
-  is_proxy=$(printf "%s\n" "$response" | jq -r '.data.information.is_proxy // false' 2>/dev/null)
+format_json_response "$response"
+return 0
+}
 
-  [[ "$is_vpn" == "true" || "$is_vpn" == "1" ]] && is_vpn=1 || is_vpn=0
-  [[ "$is_proxy" == "true" || "$is_proxy" == "1" ]] && is_proxy=1 || is_proxy=0
+# Function to call Pulsedive indicator lookup by value (IP)
+call_pulsedive_indicator() {
+local ip=$1
+local base_url="https://pulsedive.com/api/indicator.php"
+local url
 
-  # Compact list of only detected blacklist engines
-  local engines_output
-  engines_output=$(printf "%s\n" "$response" | jq -r '
-    .data.blacklists.engines // .blacklists.engines // {}
-    | to_entries
-    | map(select(.value.detected == true))
-    | .[]
-    | "- Engine: \(.key), category: \(.value.category // "n/a"), reference: \(.value.reference // "n/a")"
-  ' 2>/dev/null || true)
+# Build URL with or without API key.
+# If no key is provided, the call is still allowed, but may have stricter limits.
+if [[ -n "${PULSEDIVE_KEY:-}" ]]; then
+  url="${base_url}?indicator=${ip}&pretty=1&key=${PULSEDIVE_KEY}"
+else
+  url="${base_url}?indicator=${ip}&pretty=1"
+fi
 
-  # Decide if we have anything "positive" to show
-  if [[ "${detections:-0}" -gt 0 || "$is_vpn" -eq 1 || "$is_proxy" -eq 1 || -n "$engines_output" ]]; then
-    # Print a compact summary (caller prints the header)
-    if [[ "${detections:-0}" -gt 0 ]]; then
-      printf "APIVoid: blacklist detections: %s\n" "$detections"
-    fi
-    if [[ "$is_vpn" -eq 1 ]]; then
-      printf "APIVoid: IP flagged as VPN\n"
-    fi
-    if [[ "$is_proxy" -eq 1 ]]; then
-      printf "APIVoid: IP flagged as proxy\n"
-    fi
-    if [[ -n "$engines_output" ]]; then
-      printf "APIVoid detected engines:\n%s\n" "$engines_output"
-    fi
-  else
-    printf "No detections found for %s in APIVoid\n" "$ip"
-  fi
+local response
+local http_code
+local exit_code
 
-  return 0
+response=$(curl -sS --max-time 10 --request GET "$url" \
+--header "accept: application/json" \
+-w "\n%{http_code}" 2>&1) || exit_code=$?
+exit_code=${exit_code:-0}
+
+if [[ $exit_code -ne 0 ]]; then
+printf "Error: curl failed (exit code: %s)\n" "$exit_code" >&2
+printf "%s\n" "$response" >&2
+return 1
+fi
+
+http_code=$(printf "%s" "$response" | tail -n1)
+response=$(printf "%s" "$response" | sed '$d')
+
+if [[ $http_code -eq 404 ]]; then
+if [[ ${QUIET:-0} -eq 0 ]]; then
+printf "No Pulsedive indicator found for %s\n" "$ip"
+fi
+return 0
+fi
+
+if [[ $http_code -ge 400 ]]; then
+printf "Error: HTTP %s - %s\n" "$http_code" "$response" >&2
+return 1
+fi
+
+if [[ -z "${response:-}" ]]; then
+printf "Warning: Empty response received from Pulsedive\n" >&2
+return 1
+fi
+
+format_json_response "$response"
+return 0
 }
 
 # Function to call Shodan InternetDB (public, no auth required)
@@ -364,7 +377,9 @@ response=$(printf "%s" "$response" | sed '$d')
 
 # 404 means Shodan has no data for this IP — not a hard error
 if [[ $http_code -eq 404 ]]; then
+if [[ ${QUIET:-0} -eq 0 ]]; then
 printf "No Shodan InternetDB data found for %s\n" "$ip"
+fi
 return 0
 fi
 
@@ -382,6 +397,7 @@ format_json_response "$response"
 }
 
 # Output results
+
 # Shodan InternetDB lookup (no API key required)
 printf "\n--- Shodan InternetDB Results ---\n"
 if ! call_shodan_internetdb "$ip_address"; then
@@ -393,9 +409,13 @@ fi
 # IPinfo lookup results
 printf "\n--- IPinfo Results ---\n"
 if [[ -n "$IPINFO_TOKEN" ]]; then
-call_api_with_header_auth "$IPINFO_URL" "Authorization" "Bearer $IPINFO_TOKEN" || true
+if ! call_api_with_header_auth "$IPINFO_URL" "Authorization" "Bearer $IPINFO_TOKEN"; then
+  printf "Failed to retrieve IPinfo data.\n" >&2
+fi
 else
-call_api_public "$IPINFO_URL" || true
+if ! call_api_public "$IPINFO_URL"; then
+  printf "Failed to retrieve IPinfo data.\n" >&2
+fi
 fi
 
 # IPQualityScore lookup if API key provided
@@ -418,10 +438,12 @@ if [[ -n "$GREYNOISE_KEY" ]]; then
 GREYNOISE_URL="https://api.greynoise.io/v3/ip/$ip_address"
 printf "\n--- GreyNoise Results ---\n"
 if ! call_api_with_header_auth "$GREYNOISE_URL" "X-API-Key" "$GREYNOISE_KEY"; then
-if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
+if [[ ${QUIET:-0} -eq 0 ]]; then
+if [[ ${VERBOSE:-0} -eq 1 ]]; then
 printf "(verbose) Failed to retrieve GreyNoise data with token, falling back to community results...\n" >&2
 else
 printf "Failed to retrieve GreyNoise data with token, falling back to community results...\n"
+fi
 fi
 if ! call_api_public "https://api.greynoise.io/v3/community/$ip_address"; then
 if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
@@ -438,19 +460,32 @@ fi
 fi
 fi
 
-# APIVoid IP Reputation lookup
-if [[ -n "$APIVOID_KEY" ]]; then
-  printf "\n--- APIVoid IP Reputation Results ---\n"
-  call_apivoid_ip_reputation "$APIVOID_KEY" "$ip_address" || {
-    if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
-      printf "(verbose) Failed to retrieve APIVoid data\n" >&2
-    fi
-  }
+# OSM IP Reputation lookup
+if [[ -n "$OSM_KEY" ]]; then
+printf "\n--- OSM IP Reputation Results ---\n"
+call_osm_ip_reputation "$OSM_KEY" "$ip_address" || {
+if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
+printf "(verbose) Failed to retrieve OSM data\n" >&2
+fi
+}
 else
-  if [[ ${QUIET:-0} -eq 0 ]]; then
-    echo "APIVoid API key not provided. Skipping APIVoid lookup."
-  fi
+if [[ ${QUIET:-0} -eq 0 ]]; then
+echo "OSM API key not provided. Skipping OSM lookup."
+fi
+fi
+
+# Pulsedive lookup (always attempted, with or without key)
+printf "\n--- Pulsedive Indicator Results ---\n"
+if [[ -z "${PULSEDIVE_KEY:-}" && ${QUIET:-0} -eq 0 ]]; then
+echo "Pulsedive API key not provided. Performing unauthenticated lookup (may be limited)."
+fi
+if ! call_pulsedive_indicator "$ip_address"; then
+if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
+printf "(verbose) Failed to retrieve Pulsedive data\n" >&2
+fi
 fi
 
 # Final message displayed to screen
+if [[ ${QUIET:-0} -eq 0 ]]; then
 printf "\nIPLookup complete.\n\n"
+fi
