@@ -1,6 +1,6 @@
-## IP Lookup Script
+# IP Lookup Script
 
-### Description
+## Description
 The IP lookup script (`iplookup.sh` / `iplookup_improved.sh`) retrieves geographical and network information for IP addresses using five services:
 - **IPinfo.io** - Provides basic geographical and network information
 - **IPQualityScore (IPQS)** - Provides additional IP intelligence and threat assessment (optional)
@@ -58,7 +58,7 @@ The IP lookup script (`iplookup.sh` / `iplookup_improved.sh`) retrieves geograph
 1. Clone the repository:
 ```bash
 git clone https://github.com/lamontsession/code-space.git
-cd code-space
+cd code-space/iplookup
 ```
 
 2. Make the script executable:
