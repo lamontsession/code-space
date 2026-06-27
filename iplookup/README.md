@@ -1,7 +1,7 @@
 # IP Lookup Script
 
 ## Description
-The IP lookup script (`iplookup.sh` / `iplookup_improved.sh`) retrieves geographical and network information for IP addresses using five services:
+The IP lookup script (`iplookup.sh`) retrieves geographical and network information for IP addresses using currently five services:
 - **IPinfo.io** - Provides basic geographical and network information
 - **IPQualityScore (IPQS)** - Provides additional IP intelligence and threat assessment (optional)
 - **GreyNoise** - Provides Threat Actor intelligence, internet scanning heuristics, known malicious IP detection
@@ -10,7 +10,6 @@ The IP lookup script (`iplookup.sh` / `iplookup_improved.sh`) retrieves geograph
 - **Shodan InternetDB** - Provides service/port information and open port enumeration (public, no auth required)
 
 ### Features
-- Supports both IPv4 and IPv6 addresses with robust input validation using `python3 inet_pton` (fallback regex available)
 - Automatic detection and usage of API tokens for supported services from environment variables, `~/.iplookup.conf` config file, or interactive input prompt
 - Interactive prompt mode – run `iplookup.sh` without arguments to be prompted for an IP address
 - Non-interactive mode with `--no-prompt` flag for CI/automation use (prevents hangs on missing tokens)
@@ -32,27 +31,13 @@ The IP lookup script (`iplookup.sh` / `iplookup_improved.sh`) retrieves geograph
 - All API lookups configured independently and optional
 - Secure handling of tokens (masked when entering interactively, never echoed in output)
 - Requires only curl (mandatory) and jq (optional for pretty printing)
-- **Improved IPv6 validation** using Python's `inet_pton` when available
 
-### Version Comparison
-
-| Feature | iplookup.sh | iplookup_improved.sh |
-|---------|------------|----------------------|
-| Basic IP Lookup | ✓ | ✓ |
-| Retry Logic with Backoff | ✗ | ✓ (3 attempts, 2^n delay) |
-| Robust IPv6 Validation | Regex only | Python `inet_pton` + fallback |
-| User-Agent Header | ✗ | ✓ |
-| 404 Fallback Handling | Basic | Enhanced (verbose mode aware) |
-| Empty Response Handling | Generic | Clear "(no body)" display |
-| URL in Error Messages | ✗ | ✓ |
-| Rate Limit (429) Handling | Basic | Auto-retry with backoff |
-| GreyNoise Community Fallback | ✓ | ✓ (improved) |
 
 ### Prerequisites
 - `bash` shell
 - `curl` for making HTTP requests
 - `jq` (optional but recommended) for JSON formatting
-- `python3` (optional, for robust IPv6 validation; fallback regex used if unavailable)
+
 
 ### Installation
 1. Clone the repository:
@@ -64,7 +49,6 @@ cd code-space/iplookup
 2. Make the script executable:
 ```bash
 chmod +x iplookup.sh
-chmod +x iplookup_improved.sh  # For the enhanced version
 ```
 
 ### Configuration
@@ -111,10 +95,6 @@ Note: The script works without API tokens but with rate limitations. Using API t
 ./iplookup.sh -h                        # Show help message
 ./iplookup.sh --help                    # Show help message
 
-# Using the improved version with retries and better error handling:
-./iplookup_improved.sh 192.168.1.1 -v  # Verbose improved lookup
-./iplookup_improved.sh 2001:db8::1     # IPv6 address lookup
-```
 
 ### Command-Line Options
 - `-q, --quiet` — Suppress non-error output; useful for scripting and automation
@@ -173,7 +153,7 @@ All results are displayed as JSON. When `jq` is installed, results are pretty-pr
 - Silent retries in quiet mode; verbose logging in `-v` mode
 - Client errors (4xx except 404) and permanent failures fail immediately
 
-**Graceful Degradation:**
+**Degradation:**
 - 404 errors on authenticated GreyNoise endpoint → automatic fallback to community API
 - Missing API keys → services skipped with informative messages
 - Network timeouts → clear error messages with request URLs
@@ -195,4 +175,4 @@ LaMont Session
 
 ## Last Updated
 
-2026-05-08
+2026-06-27
