@@ -1,550 +1,501 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Author: LaMont Session
 # Date Created: 2025-10-28
-# Last Modified: 2026-10-21
+# Last Modified: 2026-10-25
+#
+# Retrieve geographical, threat intelligence, and network information
+# for an IPv4 or IPv6 address.
+#
+# Dependencies: bash, curl, python3
+# Optional: jq
+#
+# Config files are sourced as Bash code. Only use trusted files.
 
-# Description:
-# This is an ip lookup script that retrieves geographical, threat intelligence, and network information for a given IP address.
+set -euo pipefail
 
-# Usage:
-# iplookup
-# iplookup -h|--help Show this help message
-
-# Fail on error, undefined var, and fail pipeline on first failing command
-set -e # Exit immediately if a command exits with a non-zero status
-set -u # Treat unset variables as an error
-set -o pipefail # Return the exit status of the first failed command in a pipeline
-
-# Function to show help message
-show_help() {
-echo "Usage: $(basename "$0") "
-echo "# This is an ip lookup script that retrieves geographical, threat intelligence, and network information for a given IP address."
-echo ""
-echo "Options:"
-echo " -q, --quiet Suppress non-error output"
-echo " -v, --verbose Verbose output (debug)"
-echo " -c, --config FILE Specify alternate config file"
-echo " --no-prompt Do not prompt for missing API tokens"
-echo " -h, --help Show this help message"
-exit 0
-}
-
-# Helper function to trim leading and trailing whitespace
-trim_whitespace() {
-local str="$1"
-str="${str#${str%%[![:space:]]*}}"
-str="${str%${str##*[![:space:]]}}"
-printf "%s\n" "$str"
-}
-
-## CLI flags
 QUIET=0
 VERBOSE=0
 NO_PROMPT=0
 CONFIG_FILE_OVERRIDE=""
+CONFIG_EXPLICIT=0
+FAILURES=0
 
-while [[ $# -gt 0 ]]; do
-case "$1" in
--h|--help)
-show_help
-;;
--q|--quiet)
-QUIET=1; shift ;;
--v|--verbose)
-VERBOSE=1; shift ;;
--c|--config)
-if [[ $# -lt 2 ]]; then
-printf "Error: -c|--config requires an argument\n" >&2; exit 1
-fi
-CONFIG_FILE_OVERRIDE="$2"; shift 2 ;;
---config=*)
-CONFIG_FILE_OVERRIDE="${1#*=}"; shift ;;
---no-prompt)
-NO_PROMPT=1; shift ;;
---)
-shift; break ;;
--*)
-printf "Unknown option: %s\n" "$1" >&2; exit 1 ;;
-*)
-break ;;
-esac
+show_help() {
+    cat <<EOF
+Usage: ${0##*/} [OPTIONS] [IP_ADDRESS]
+
+Retrieve geographical, threat intelligence, and network information.
+
+Options:
+  -q, --quiet        Suppress headings, prompts, and informational messages
+  -v, --verbose      Print additional diagnostics to stderr
+  -c, --config FILE  Source a trusted alternate Bash configuration file
+      --no-prompt    Never prompt for an IP address or API tokens
+  -h, --help         Show this help message
+
+Default configuration:
+  \${XDG_CONFIG_HOME:-\$HOME/.config}/iplookup/config
+
+Exit codes:
+  0  All attempted lookups succeeded or returned no record
+  1  One or more attempted lookups failed
+  2  Invalid input, configuration, or missing dependency
+
+A missing threat-intelligence record does not establish that an IP is safe.
+EOF
+}
+
+die() {
+    printf 'Error: %s\n' "$*" >&2
+    exit 2
+}
+
+info() {
+    if (( QUIET == 0 )); then
+        printf '%s\n' "$*" >&2
+    fi
+    return 0
+}
+
+debug() {
+    if (( VERBOSE == 1 && QUIET == 0 )); then
+        printf '(verbose) %s\n' "$*" >&2
+    fi
+    return 0
+}
+
+heading() {
+    if (( QUIET == 0 )); then
+        printf '\n--- %s ---\n' "$*" >&2
+    fi
+    return 0
+}
+
+trim_whitespace() {
+    local value=${1-}
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s' "$value"
+}
+
+while (( $# > 0 )); do
+    case "$1" in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        -q|--quiet)
+            QUIET=1
+            NO_PROMPT=1
+            shift
+            ;;
+        -v|--verbose)
+            VERBOSE=1
+            shift
+            ;;
+        -c|--config)
+            (( $# >= 2 )) || die "$1 requires a filename."
+            [[ -n "$2" ]] || die "Configuration filename cannot be empty."
+            CONFIG_FILE_OVERRIDE=$2
+            CONFIG_EXPLICIT=1
+            shift 2
+            ;;
+        --config=*)
+            CONFIG_FILE_OVERRIDE=${1#*=}
+            [[ -n "$CONFIG_FILE_OVERRIDE" ]] ||
+                die "Configuration filename cannot be empty."
+            CONFIG_EXPLICIT=1
+            shift
+            ;;
+        --no-prompt)
+            NO_PROMPT=1
+            shift
+            ;;
+        --)
+            shift
+            break
+            ;;
+        -*)
+            die "Unknown option: $1"
+            ;;
+        *)
+            break
+            ;;
+    esac
 done
 
-# Remaining positional argument is the IP address
-if [[ $# -ge 1 ]]; then
-ip_address="$1"
+(( $# <= 1 )) || die "Expected exactly one IP address."
+
+if (( $# == 1 )); then
+    ip_address=$1
 else
-if [[ $NO_PROMPT -eq 1 ]]; then
-printf "Error: IP address required in non-interactive mode\n" >&2
-exit 2
-fi
-read -p "Enter an IP address to look up: " ip_address
-fi
-
-# Load configuration: allow override from CLI, default to ${PWD}/.iplookup.conf
-if [[ -n "${CONFIG_FILE_OVERRIDE:-}" ]]; then
-CONFIG_FILE="$CONFIG_FILE_OVERRIDE"
-else
-CONFIG_FILE="${PWD}/.iplookup.conf"
-fi
-if [[ -f "$CONFIG_FILE" ]]; then
-# shellcheck source=/dev/null
-source "$CONFIG_FILE"
+    if (( NO_PROMPT == 1 )) || [[ ! -t 0 ]]; then
+        die "IP address required in non-interactive mode."
+    fi
+    if ! read -r -p 'Enter an IP address to look up: ' ip_address; then
+        die "Unable to read an IP address."
+    fi
 fi
 
-# Ensure required tools are available
-if ! command -v curl >/dev/null 2>&1; then
-printf "Error: 'curl' is required but not installed.\n"
-exit 1
-fi
-if ! command -v jq >/dev/null 2>&1; then
-if [[ ${QUIET:-0} -eq 0 ]]; then
-printf "Note: 'jq' not found — output will be raw JSON.\n"
-fi
-fi
+ip_address=$(trim_whitespace "$ip_address")
+[[ -n "$ip_address" ]] || die "IP address cannot be empty."
 
-# Validate IP address format (IPv4 and IPv6)
-ipv4_regex='^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$'
-ipv6_regex='^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$'
+for dependency in curl python3; do
+    command -v "$dependency" >/dev/null 2>&1 ||
+        die "'$dependency' is required but not installed."
+done
 
-if ! [[ "$ip_address" =~ $ipv4_regex ]]& ! [[ "$ip_address" =~ $ipv6_regex ]]; then
-echo "Error: Invalid IP address format."
-exit 1
-fi
-
-# Function to prompt for tokens if needed
-prompt_for_tokens() {
-if [[ "${NO_PROMPT:-0}" -eq 1 ]]; then
-if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
-printf "Skipping interactive token prompts (--no-prompt set)\n"
-fi
-return
-fi
-
-# Check for IPinfo token
-if [[ -z "${IPINFO_TOKEN:-}" ]]; then
-read -p "Would you like to enter an IPinfo.io token? (y/n): " use_ipinfo
-if [[ "$use_ipinfo" == "y" || "$use_ipinfo" == "Y" ]]; then
-read -rs -p "Enter your IPinfo.io token: " IPINFO_TOKEN
-IPINFO_TOKEN=$(trim_whitespace "$IPINFO_TOKEN")
-echo
-fi
-fi
-
-# Check for IPQS key
-if [[ -z "${IPQS_KEY:-}" ]]; then
-read -p "Would you like to enter an IPQualityScore API key? (y/n): " use_ipqs
-if [[ "$use_ipqs" == "y" || "$use_ipqs" == "Y" ]]; then
-read -rs -p "Enter your IPQualityScore API key: " IPQS_KEY
-IPQS_KEY=$(trim_whitespace "$IPQS_KEY")
-echo
-fi
-fi
-
-# Check for OSM key
-if [[ -z "${OSM_KEY:-}" ]]; then
-read -p "Would you like to enter an OSM API key? (y/n): " use_osm
-if [[ "$use_osm" == "y" || "$use_osm" == "Y" ]]; then
-read -rs -p "Enter your OSM API key: " OSM_KEY
-OSM_KEY=$(trim_whitespace "$OSM_KEY")
-echo
-fi
-fi
-
-# Check for GreyNoise key
-if [[ -z "${GREYNOISE_KEY:-}" ]]; then
-read -p "Would you like to enter a GreyNoise API key? (y/n): " use_gn
-if [[ "$use_gn" == "y" || "$use_gn" == "Y" ]]; then
-read -rs -p "Enter your GreyNoise API key: " GREYNOISE_KEY
-GREYNOISE_KEY=$(trim_whitespace "$GREYNOISE_KEY")
-echo
-fi
-fi
-
-# NOTE: Pulsedive is optional and should work unauthenticated,
-# so we do NOT prompt for PULSEDIVE_KEY here. It is used if present.
-}
-
-# Use API tokens from config file or environment variables
-IPINFO_TOKEN=${IPINFO_TOKEN:-}
-IPQS_KEY=${IPQS_KEY:-${IPQS_API_KEY:-}}
-GREYNOISE_KEY=${GREYNOISE_KEY:-${GREYNOISE_API_KEY:-}}
-OSM_KEY=${OSM_KEY:-${OSM_API_KEY:-}}
-PULSEDIVE_KEY=${PULSEDIVE_KEY:-${PULSEDIVE_API_KEY:-}}
-
-# Prompt for tokens if not found in environment or config
-prompt_for_tokens
-
-# Set up IPinfo URL (token will be passed via header when available)
-IPINFO_URL="https://ipinfo.io/$ip_address"
-
-# Function to validate and format JSON response
-format_json_response() {
-local response=$1
-if [[ "$response" =~ ^[[:space:]]*[\{\[]+ ]]; then
+HAS_JQ=0
 if command -v jq >/dev/null 2>&1; then
-printf "%s\n" "$response" | jq . 2>/dev/null || printf "%s\n" "$response"
+    HAS_JQ=1
 else
-printf "%s\n" "$response"
+    info "Note: jq not found; responses will be printed without formatting."
 fi
+
+# Validate the input, reject scoped IPv6 addresses, and normalize it.
+# Hostnames, URLs, CIDR ranges, and IPv4 addresses with leading zeros
+# are intentionally not accepted at this time, but may be added in future releases.
+if ! parsed_ip=$(
+    python3 - "$ip_address" <<'PY'
+import ipaddress
+import sys
+
+value = sys.argv[1]
+
+try:
+    if "%" in value:
+        raise ValueError("Scoped IPv6 addresses are not supported")
+    address = ipaddress.ip_address(value)
+except ValueError:
+    sys.exit(1)
+
+print(address.version)
+print(address.compressed)
+PY
+); then
+    die "Invalid IP address: $ip_address"
+fi
+
+IP_VERSION=${parsed_ip%%$'\n'*}
+ip_address=${parsed_ip#*$'\n'}
+
+# Avoid automatically sourcing executable configuration from $PWD.
+CONFIG_FILE=""
+if (( CONFIG_EXPLICIT == 1 )); then
+    CONFIG_FILE=$CONFIG_FILE_OVERRIDE
+elif [[ -n "${XDG_CONFIG_HOME:-}" ]]; then
+    CONFIG_FILE="${XDG_CONFIG_HOME}/iplookup/config"
+elif [[ -n "${HOME:-}" ]]; then
+    CONFIG_FILE="${HOME}/.config/iplookup/config"
+fi
+
+if [[ -n "$CONFIG_FILE" ]]; then
+    if [[ -e "$CONFIG_FILE" ]]; then
+        [[ -f "$CONFIG_FILE" && -r "$CONFIG_FILE" ]] ||
+            die "Configuration is not a readable regular file: $CONFIG_FILE"
+        debug "Loading trusted configuration: $CONFIG_FILE"
+        # shellcheck source=/dev/null
+        source "$CONFIG_FILE"
+    elif (( CONFIG_EXPLICIT == 1 )); then
+        die "Configuration file not found: $CONFIG_FILE"
+    fi
+fi
+
+IPINFO_TOKEN=$(trim_whitespace "${IPINFO_TOKEN:-}")
+IPQS_KEY=$(trim_whitespace "${IPQS_KEY:-${IPQS_API_KEY:-}}")
+GREYNOISE_KEY=$(trim_whitespace \
+    "${GREYNOISE_KEY:-${GREYNOISE_API_KEY:-}}")
+OSM_KEY=$(trim_whitespace "${OSM_KEY:-${OSM_API_KEY:-}}")
+PULSEDIVE_KEY=$(trim_whitespace \
+    "${PULSEDIVE_KEY:-${PULSEDIVE_API_KEY:-}}")
+
+prompt_for_token() {
+    local variable=$1
+    local label=$2
+    local answer=""
+    local value=""
+
+    [[ -z "${!variable}" ]] || return 0
+    (( NO_PROMPT == 0 )) || return 0
+    [[ -t 0 ]] || return 0
+
+    if ! read -r -p "Enter a ${label} token/key? [y/N]: " answer; then
+        printf '\n' >&2
+        return 0
+    fi
+
+    case "$answer" in
+        y|Y|yes|YES)
+            if ! read -r -s -p "${label} token/key: " value; then
+                printf '\n' >&2
+                return 0
+            fi
+            printf '\n' >&2
+            value=$(trim_whitespace "$value")
+            printf -v "$variable" '%s' "$value"
+            ;;
+    esac
+    return 0
+}
+
+prompt_for_token IPINFO_TOKEN "IPinfo"
+prompt_for_token IPQS_KEY "IPQualityScore"
+prompt_for_token OSM_KEY "OpenSourceMalware"
+
+if [[ "$IP_VERSION" == 4 ]]; then
+    prompt_for_token GREYNOISE_KEY "GreyNoise"
+fi
+
+# Prevent malformed headers caused by embedded CR/LF in credentials.
+for token_name in \
+    IPINFO_TOKEN IPQS_KEY GREYNOISE_KEY OSM_KEY PULSEDIVE_KEY
+do
+    token_value=${!token_name}
+    if [[ "$token_value" == *$'\r'* || "$token_value" == *$'\n'* ]]; then
+        die "$token_name contains an embedded newline."
+    fi
+done
+unset token_name token_value
+
+format_response() {
+    local body=$1
+
+    if (( HAS_JQ == 1 )); then
+        if printf '%s\n' "$body" | jq . 2>/dev/null; then
+            return 0
+        fi
+    fi
+
+    printf '%s\n' "$body"
+}
+
+# Shared HTTP response state; request functions run in the current shell.
+HTTP_STATUS=""
+HTTP_BODY=""
+
+http_get() {
+    local provider=$1
+    local url=$2
+    shift 2
+
+    local response=""
+    local curl_status=0
+
+    HTTP_STATUS=""
+    HTTP_BODY=""
+
+    # Disable ~/.curlrc, keep diagnostics on stderr, and do not follow
+    # redirects automatically. Never print URLs containing API keys.
+    response=$(
+        curl --disable \
+            --silent --show-error \
+            --globoff \
+            --connect-timeout 5 \
+            --max-time 20 \
+            --proto '=https' \
+            --header 'Accept: application/json' \
+            --write-out $'\n%{http_code}' \
+            "$@" \
+            --url "$url"
+    ) || curl_status=$?
+
+    if (( curl_status != 0 )); then
+        printf 'Error: %s transport failure (curl exit %s).\n' \
+            "$provider" "$curl_status" >&2
+        return 1
+    fi
+
+    if [[ "$response" != *$'\n'* ]]; then
+        printf 'Error: %s returned no HTTP status trailer.\n' \
+            "$provider" >&2
+        return 1
+    fi
+
+    HTTP_STATUS=${response##*$'\n'}
+    HTTP_BODY=${response%$'\n'*}
+
+    if [[ ! "$HTTP_STATUS" =~ ^[0-9]{3}$ ]]; then
+        printf 'Error: %s returned an invalid HTTP status.\n' \
+            "$provider" >&2
+        return 1
+    fi
+
+    debug "$provider: HTTP $HTTP_STATUS"
+    return 0
+}
+
+# Return 0 for success, 1 for error, and 2 for an allowed no-record 404.
+lookup() {
+    local provider=$1
+    local url=$2
+    local allow_no_record=$3
+    shift 3
+
+    if ! http_get "$provider" "$url" "$@"; then
+        return 1
+    fi
+
+    case "$HTTP_STATUS" in
+        2??)
+            if [[ -z "$HTTP_BODY" ]]; then
+                printf 'Error: %s returned an empty response.\n' \
+                    "$provider" >&2
+                return 1
+            fi
+            format_response "$HTTP_BODY"
+            return 0
+            ;;
+        404)
+            if [[ "$allow_no_record" == yes ]]; then
+                info "$provider: no record found for $ip_address; this does not establish that the IP is safe."
+                return 2
+            fi
+            ;;
+    esac
+
+    printf 'Error: %s returned HTTP %s.\n' \
+        "$provider" "$HTTP_STATUS" >&2
+
+    if [[ -n "$HTTP_BODY" ]]; then
+        format_response "$HTTP_BODY" >&2
+    fi
+
+    return 1
+}
+
+# Ordinary providers: no-record responses do not count as failures.
+run_lookup() {
+    local result=0
+
+    lookup "$@" || result=$?
+
+    if (( result == 1 )); then
+        FAILURES=$((FAILURES + 1))
+    fi
+
+    return 0
+}
+
+# Shodan InternetDB: keep this integration IPv4-only.
+if [[ "$IP_VERSION" == 4 ]]; then
+    heading "Shodan InternetDB Results"
+    run_lookup \
+        "Shodan InternetDB" \
+        "https://internetdb.shodan.io/$ip_address" \
+        yes
 else
-printf "%s\n" "$response"
-fi
-}
-
-# Function to call API with header authentication (GET)
-call_api_with_header_auth() {
-local url=$1
-local header_name=$2
-local header_value=$3
-local response
-local http_code
-local exit_code
-
-response=$(curl -sS --max-time 10 --request GET --url "$url" \
---header "accept: application/json" \
---header "$header_name: $header_value" \
--w "\n%{http_code}" 2>&1) || exit_code=$?
-exit_code=${exit_code:-0}
-
-if [[ $exit_code -ne 0 ]]; then
-printf "Error: curl failed (exit code: %s)\n" "$exit_code" >&2
-printf "%s\n" "$response"
-return 1
+    info "Skipping Shodan InternetDB: this integration is IPv4-only."
 fi
 
-http_code=$(printf "%s" "$response" | tail -n1)
-response=$(printf "%s" "$response" | sed '$d')
-
-if [[ $http_code -ge 400 ]]; then
-printf "Error: HTTP %s - %s\n" "$http_code" "$response" >&2
-return 1
-fi
-
-if [[ -z "${response:-}" ]]; then
-printf "Warning: Empty response received from %s\n" "$url"
-return 1
-fi
-
-format_json_response "$response"
-}
-
-# Function to call API with no authentication (GET)
-call_api_public() {
-local url=$1
-local response
-local http_code
-local exit_code
-
-response=$(curl -sS --max-time 10 "$url" -w "\n%{http_code}" 2>&1) || exit_code=$?
-exit_code=${exit_code:-0}
-
-if [[ $exit_code -ne 0 ]]; then
-printf "Error: curl failed (exit code: %s)\n" "$exit_code" >&2
-printf "%s\n" "$response"
-return 1
-fi
-
-http_code=$(printf "%s" "$response" | tail -n1)
-response=$(printf "%s" "$response" | sed '$d')
-
-if [[ $http_code -ge 400 ]]; then
-printf "Error: HTTP %s - %s\n" "$http_code" "$response" >&2
-return 1
-fi
-
-if [[ -z "${response:-}" ]]; then
-printf "Warning: Empty response received from %s\n" "$url"
-return 1
-fi
-
-format_json_response "$response"
-}
-
-# GreyNoise-specific handling keeps no-data responses out of generic API errors.
-# Return 0 for results / Community no-data, 1 for errors, 2 for IP Lookup no-data.
-call_greynoise() {
-local endpoint=$1
-local ip=$2
-local api_key=${3:-}
-local url="https://api.greynoise.io/v3/$endpoint/$ip"
-local response http_code detail
-local exit_code=0
-local -a headers=(--header "Accept: application/json")
-if [[ -n "$api_key" ]]; then
-headers+=(--header "Key: $api_key")
-fi
-
-# Keep curl diagnostics on stderr, separate from the body and status trailer.
-# Do not use --fail: 404 bodies are useful normal no-data results.
-response=$(curl -sS --max-time 10 --request GET --url "$url" \
-"${headers[@]}" --write-out $'\n%{http_code}') || exit_code=$?
-http_code=${response##*$'\n'}
-if [[ $exit_code -ne 0 ]]; then
-printf 'Error: GreyNoise %s transport failure (curl exit %s; HTTP %s).\n' \
-"$endpoint" "$exit_code" "${http_code:-unavailable}" >&2
-return 1
-fi
-if [[ "$response" != *$'\n'* || ! "$http_code" =~ ^[0-9]{3}$ ]]; then
-printf 'Error: GreyNoise %s returned an invalid HTTP status trailer.\n' "$endpoint" >&2
-return 1
-fi
-response=${response%$'\n'*}
-if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
-printf '(verbose) GreyNoise %s: HTTP %s\n' "$endpoint" "$http_code" >&2
-fi
-
-case "$http_code" in
-200)
-if [[ -z "$response" ]]; then
-printf 'Error: GreyNoise %s returned HTTP 200 with an empty body.\n' "$endpoint" >&2
-return 1
-fi
-format_json_response "$response"
-return 0
-;;
-404)
-if [[ ${QUIET:-0} -eq 0 ]]; then
-printf 'GreyNoise %s: no record found for %s (HTTP 404); this does not establish that the IP is safe.\n' "$endpoint" "$ip"
-if [[ -n "$response" ]]; then
-format_json_response "$response"
-fi
-fi
-# Still try Community after the authenticated IP Lookup has no record.
-if [[ "$endpoint" == "ip" ]]; then
-return 2
-fi
-return 0
-;;
-400) detail='Invalid request; check whether the IP is supported and publicly routable.' ;;
-401) detail='Authentication failed; check the GreyNoise API key.' ;;
-403) detail='Access denied; check the API key permissions and plan entitlement.' ;;
-429) detail='Rate limit reached; retry later or check your plan quota.' ;;
-5??) detail='GreyNoise server error; retry later.' ;;
-3??) detail='Unexpected redirect; check the API endpoint.' ;;
-*) detail='Unexpected HTTP response.' ;;
-esac
-printf 'Error: GreyNoise %s HTTP %s - %s\n' "$endpoint" "$http_code" "$detail" >&2
-if [[ -n "$response" ]]; then
-format_json_response "$response" >&2
-fi
-return 1
-}
-
-# Function to call OpenSourceMalware Community Threat Database IP lookup (GET)
-call_osm_ip_reputation() {
-local api_key=$1
-local ip=$2
-local url="https://api.opensourcemalware.com/functions/v1/check-malicious?report_type=ip&resource_identifier=$ip"
-local response
-local http_code
-local exit_code
-
-response=$(curl -sS --max-time 10 --request GET "$url" \
---header "accept: application/json" \
---header "Authorization: Bearer $api_key" \
--w "\n%{http_code}" 2>&1) || exit_code=$?
-exit_code=${exit_code:-0}
-
-if [[ $exit_code -ne 0 ]]; then
-printf "Error: curl failed (exit code: %s)\n" "$exit_code" >&2
-printf "%s\n" "$response" >&2
-return 1
-fi
-
-http_code=$(printf "%s" "$response" | tail -n1)
-response=$(printf "%s" "$response" | sed '$d')
-
-if [[ $http_code -ge 400 ]]; then
-printf "Error: HTTP %s - %s\n" "$http_code" "$response" >&2
-return 1
-fi
-
-if [[ -z "${response:-}" ]]; then
-printf "Warning: Empty response received from OpenSourceMalware\n" >&2
-return 1
-fi
-
-format_json_response "$response"
-return 0
-}
-
-# Function to call Pulsedive indicator lookup by value (IP)
-call_pulsedive_indicator() {
-local ip=$1
-local base_url="https://pulsedive.com/api/indicator.php"
-local url
-
-# Build URL with or without API key.
-# If no key is provided, the call is still allowed, but may have stricter limits.
-if [[ -n "${PULSEDIVE_KEY:-}" ]]; then
-  url="${base_url}?indicator=${ip}&pretty=1&key=${PULSEDIVE_KEY}"
-else
-  url="${base_url}?indicator=${ip}&pretty=1"
-fi
-
-local response
-local http_code
-local exit_code
-
-response=$(curl -sS --max-time 10 --request GET "$url" \
---header "accept: application/json" \
--w "\n%{http_code}" 2>&1) || exit_code=$?
-exit_code=${exit_code:-0}
-
-if [[ $exit_code -ne 0 ]]; then
-printf "Error: curl failed (exit code: %s)\n" "$exit_code" >&2
-printf "%s\n" "$response" >&2
-return 1
-fi
-
-http_code=$(printf "%s" "$response" | tail -n1)
-response=$(printf "%s" "$response" | sed '$d')
-
-if [[ $http_code -eq 404 ]]; then
-if [[ ${QUIET:-0} -eq 0 ]]; then
-printf "No Pulsedive indicator found for %s\n" "$ip"
-fi
-return 0
-fi
-
-if [[ $http_code -ge 400 ]]; then
-printf "Error: HTTP %s - %s\n" "$http_code" "$response" >&2
-return 1
-fi
-
-if [[ -z "${response:-}" ]]; then
-printf "Warning: Empty response received from Pulsedive\n" >&2
-return 1
-fi
-
-format_json_response "$response"
-return 0
-}
-
-# Function to call Shodan InternetDB (public, no auth required)
-call_shodan_internetdb() {
-local ip=$1
-local url="https://internetdb.shodan.io/$ip"
-local response
-local http_code
-local exit_code
-
-response=$(curl -sS --max-time 10 --request GET "$url" \
---header "accept: application/json" \
--w "\n%{http_code}" 2>&1) || exit_code=$?
-exit_code=${exit_code:-0}
-
-if [[ $exit_code -ne 0 ]]; then
-printf "Error: curl failed (exit code: %s)\n" "$exit_code" >&2
-printf "%s\n" "$response"
-return 1
-fi
-
-http_code=$(printf "%s" "$response" | tail -n1)
-response=$(printf "%s" "$response" | sed '$d')
-
-# 404 means Shodan has no data for this IP — not a hard error
-if [[ $http_code -eq 404 ]]; then
-if [[ ${QUIET:-0} -eq 0 ]]; then
-printf "No Shodan InternetDB data found for %s\n" "$ip"
-fi
-return 0
-fi
-
-if [[ $http_code -ge 400 ]]; then
-printf "Error: HTTP %s - %s\n" "$http_code" "$response" >&2
-return 1
-fi
-
-if [[ -z "${response:-}" ]]; then
-printf "Warning: Empty response received from Shodan InternetDB\n"
-return 1
-fi
-
-format_json_response "$response"
-}
-
-# Output results
-
-# Shodan InternetDB lookup (no API key required)
-printf "\n--- Shodan InternetDB Results ---\n"
-if ! calshodan_internetdb "$ip_address"; then
-if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
-printf "(verbose) Failed to retrieve Shodan InternetDB data\n" >&2
-fi
-fi
-
-# IPinfo lookup results
-printf "\n--- IPinfo Results ---\n"
+heading "IPinfo Results"
 if [[ -n "$IPINFO_TOKEN" ]]; then
-if ! call_api_with_header_auth "$IPINFO_URL" "Authorization" "Bearer $IPINFO_TOKEN"; then
-  printf "Failed to retrieve IPinfo data.\n" >&2
-fi
+    run_lookup \
+        "IPinfo" \
+        "https://ipinfo.io/$ip_address/json" \
+        no \
+        --header "Authorization: Bearer $IPINFO_TOKEN"
 else
-if ! call_api_public "$IPINFO_URL"; then
-  printf "Failed to retrieve IPinfo data.\n" >&2
-fi
+    run_lookup \
+        "IPinfo" \
+        "https://ipinfo.io/$ip_address/json" \
+        no
 fi
 
-# IPQualityScore lookup if API key provided
 if [[ -n "$IPQS_KEY" ]]; then
-IPQS_URL="https://www.ipqualityscore.com/api/json/ip/$IPQS_KEY/$ip_address"
-printf "\n--- IPQS Results ---\n"
-if ! call_api_public "$IPQS_URL"; then
-if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
-printf "(verbose) Failed to retrieve IPQS data\n" >&2
-fi
-fi
+    heading "IPQualityScore Results"
+
+    # The key is a URL path component; encode reserved characters.
+    encoded_ipqs_key=$(
+        python3 - "$IPQS_KEY" <<'PY'
+import sys
+from urllib.parse import quote
+print(quote(sys.argv[1], safe=""))
+PY
+    )
+
+    run_lookup \
+        "IPQualityScore" \
+        "https://www.ipqualityscore.com/api/json/ip/$encoded_ipqs_key/$ip_address" \
+        no
+    unset encoded_ipqs_key
 else
-if [[ ${QUIET:-0} -eq 0 ]]; then
-echo "IPQualityScore API key not provided. Skipping IPQS lookup."
-fi
+    info "IPQualityScore API key not provided; skipping lookup."
 fi
 
-# GreyNoise lookup
-GREYNOISE_KEY=$(trim_whitespace "$GREYNOISE_KEY")
-if [[ -n "$GREYNOISE_KEY" ]]; then
-printf "\n--- GreyNoise Results ---\n"
-if ! call_greynoise "ip" "$ip_address" "$GREYNOISE_KEY"; then
-if [[ ${QUIET:-0} -eq 0 ]]; then
-printf 'Trying GreyNoise Community results (unauthenticated fallback)...\n' >&2
-fi
-# Preserve the public fallback, including when the configured key is invalid.
-call_greynoise "community" "$ip_address" || :
-fi
+if [[ "$IP_VERSION" == 4 ]]; then
+    heading "GreyNoise Results"
+
+    greynoise_result=0
+
+    if [[ -n "$GREYNOISE_KEY" ]]; then
+        lookup \
+            "GreyNoise IP Lookup" \
+            "https://api.greynoise.io/v3/ip/$ip_address" \
+            yes \
+            --header "key: $GREYNOISE_KEY" ||
+            greynoise_result=$?
+
+        if (( greynoise_result != 0 )); then
+            if (( greynoise_result == 1 )); then
+                FAILURES=$((FAILURES + 1))
+            fi
+
+            info "Trying GreyNoise Community with the configured key..."
+            run_lookup \
+                "GreyNoise Community" \
+                "https://api.greynoise.io/v3/community/$ip_address" \
+                yes \
+                --header "key: $GREYNOISE_KEY"
+        fi
+    else
+        info "No GreyNoise key provided; trying Community without authentication."
+        run_lookup \
+            "GreyNoise Community" \
+            "https://api.greynoise.io/v3/community/$ip_address" \
+            yes
+    fi
 else
-printf "\n--- GreyNoise Community Results ---\n"
-call_greynoise "community" "$ip_address" || :
+    info "Skipping GreyNoise: this integration requires IPv4."
 fi
 
-# OSM IP Reputation lookup
 if [[ -n "$OSM_KEY" ]]; then
-printf "\n--- OSM IP Reputation Results ---\n"
-call_osm_ip_reputation "$OSM_KEY" "$ip_address" || {
-if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
-printf "(verbose) Failed to retrieve OSM data\n" >&2
-fi
-}
+    heading "OSM IP Reputation Results"
+    run_lookup \
+        "OpenSourceMalware" \
+        "https://api.opensourcemalware.com/functions/v1/check-malicious" \
+        no \
+        --header "Authorization: Bearer $OSM_KEY" \
+        --get \
+        --data-urlencode "report_type=ip" \
+        --data-urlencode "resource_identifier=$ip_address"
 else
-if [[ ${QUIET:-0} -eq 0 ]]; then
-echo "OSM API key not provided. Skipping OSM lookup."
-fi
+    info "OSM API key not provided; skipping lookup."
 fi
 
-# Pulsedive lookup (always attempted, with or without key)
-printf "\n--- Pulsedive Indicator Results ---\n"
-if [[ -z "${PULSEDIVE_KEY:-}" && ${QUIET:-0} -eq 0 ]]; then
-echo "Pulsedive API key not provided. Performing unauthenticated lookup (may be limited)."
-fi
-if ! call_pulsedive_indicator "$ip_address"; then
-if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
-printf "(verbose) Failed to retrieve Pulsedive data\n" >&2
-fi
+heading "Pulsedive Indicator Results"
+pulsedive_options=(
+    --get
+    --data-urlencode "indicator=$ip_address"
+    --data-urlencode "pretty=1"
+)
+
+if [[ -n "$PULSEDIVE_KEY" ]]; then
+    pulsedive_options+=(--data-urlencode "key=$PULSEDIVE_KEY")
+else
+    info "No Pulsedive key provided; attempting a rate-limited unauthenticated lookup."
 fi
 
-# Final message displayed to screen
-if [[ ${QUIET:-0} -eq 0 ]]; then
-printf "\nIPLookup complete.\n\n"
+run_lookup \
+    "Pulsedive" \
+    "https://pulsedive.com/api/indicator.php" \
+    yes \
+    "${pulsedive_options[@]}"
+
+if (( FAILURES > 0 )); then
+    info "IPLookup complete with $FAILURES failed lookup attempt(s)."
+    exit 1
 fi
+
+info "IPLookup complete."
+exit 0
