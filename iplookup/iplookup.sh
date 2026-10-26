@@ -4,11 +4,15 @@
 # Date Created: 2025-10-28
 # Last Modified: 2026-10-25
 #
+# Description:
 # Retrieve geographical, threat intelligence, and network information
 # for an IPv4 or IPv6 address.
 #
 # Dependencies: bash, curl, python3
 # Optional: jq
+#
+# Default configuration:
+#   ${PWD}/.iplookup.conf
 #
 # Config files are sourced as Bash code. Only use trusted files.
 
@@ -35,7 +39,14 @@ Options:
   -h, --help         Show this help message
 
 Default configuration:
-  \${XDG_CONFIG_HOME:-\$HOME/.config}/iplookup/config
+  .iplookup.conf in the current working directory
+
+Supported configuration variables):
+  IPINFO_TOKEN
+  IPQS_API_KEY
+  GREYNOISE_API_KEY
+  OSM_API_KEY
+  PULSEDIVE_API_KEY
 
 Exit codes:
   0  All attempted lookups succeeded or returned no record
@@ -43,6 +54,7 @@ Exit codes:
   2  Invalid input, configuration, or missing dependency
 
 A missing threat-intelligence record does not establish that an IP is safe.
+Configuration files are executed as Bash code; only use trusted files.
 EOF
 }
 
@@ -74,11 +86,14 @@ heading() {
 
 trim_whitespace() {
     local value=${1-}
+
     value="${value#"${value%%[![:space:]]*}"}"
     value="${value%"${value##*[![:space:]]}"}"
+
     printf '%s' "$value"
 }
 
+# Parse command-line options.
 while (( $# > 0 )); do
     case "$1" in
         -h|--help)
@@ -97,14 +112,17 @@ while (( $# > 0 )); do
         -c|--config)
             (( $# >= 2 )) || die "$1 requires a filename."
             [[ -n "$2" ]] || die "Configuration filename cannot be empty."
+
             CONFIG_FILE_OVERRIDE=$2
             CONFIG_EXPLICIT=1
             shift 2
             ;;
         --config=*)
             CONFIG_FILE_OVERRIDE=${1#*=}
+
             [[ -n "$CONFIG_FILE_OVERRIDE" ]] ||
                 die "Configuration filename cannot be empty."
+
             CONFIG_EXPLICIT=1
             shift
             ;;
@@ -127,12 +145,14 @@ done
 
 (( $# <= 1 )) || die "Expected exactly one IP address."
 
+# Obtain the target IP.
 if (( $# == 1 )); then
     ip_address=$1
 else
     if (( NO_PROMPT == 1 )) || [[ ! -t 0 ]]; then
         die "IP address required in non-interactive mode."
     fi
+
     if ! read -r -p 'Enter an IP address to look up: ' ip_address; then
         die "Unable to read an IP address."
     fi
@@ -141,21 +161,23 @@ fi
 ip_address=$(trim_whitespace "$ip_address")
 [[ -n "$ip_address" ]] || die "IP address cannot be empty."
 
+# Ensure required dependencies are available.
 for dependency in curl python3; do
     command -v "$dependency" >/dev/null 2>&1 ||
         die "'$dependency' is required but not installed."
 done
 
 HAS_JQ=0
+
 if command -v jq >/dev/null 2>&1; then
     HAS_JQ=1
 else
     info "Note: jq not found; responses will be printed without formatting."
 fi
 
-# Validate the input, reject scoped IPv6 addresses, and normalize it.
-# Hostnames, URLs, CIDR ranges, and IPv4 addresses with leading zeros
-# are intentionally not accepted at this time, but may be added in future releases.
+# Validate and normalize IPv4/IPv6 input.
+# Hostnames, URLs, CIDR ranges, scoped IPv6 addresses, and IPv4
+# addresses with leading zeros are deliberately not accepted.
 if ! parsed_ip=$(
     python3 - "$ip_address" <<'PY'
 import ipaddress
@@ -180,28 +202,30 @@ fi
 IP_VERSION=${parsed_ip%%$'\n'*}
 ip_address=${parsed_ip#*$'\n'}
 
-# Avoid automatically sourcing executable configuration from $PWD.
-CONFIG_FILE=""
+# Load .iplookup.conf from the current working directory unless
+# an alternate configuration file was explicitly requested.
+#
 if (( CONFIG_EXPLICIT == 1 )); then
     CONFIG_FILE=$CONFIG_FILE_OVERRIDE
-elif [[ -n "${XDG_CONFIG_HOME:-}" ]]; then
-    CONFIG_FILE="${XDG_CONFIG_HOME}/iplookup/config"
-elif [[ -n "${HOME:-}" ]]; then
-    CONFIG_FILE="${HOME}/.config/iplookup/config"
+else
+    CONFIG_FILE="${PWD}/.iplookup.conf"
 fi
 
-if [[ -n "$CONFIG_FILE" ]]; then
-    if [[ -e "$CONFIG_FILE" ]]; then
-        [[ -f "$CONFIG_FILE" && -r "$CONFIG_FILE" ]] ||
-            die "Configuration is not a readable regular file: $CONFIG_FILE"
-        debug "Loading trusted configuration: $CONFIG_FILE"
-        # shellcheck source=/dev/null
-        source "$CONFIG_FILE"
-    elif (( CONFIG_EXPLICIT == 1 )); then
-        die "Configuration file not found: $CONFIG_FILE"
-    fi
+if [[ -e "$CONFIG_FILE" ]]; then
+    [[ -f "$CONFIG_FILE" && -r "$CONFIG_FILE" ]] ||
+        die "Configuration is not a readable regular file: $CONFIG_FILE"
+
+    debug "Loading trusted configuration: $CONFIG_FILE"
+
+    # shellcheck source=/dev/null
+    source "$CONFIG_FILE"
+elif (( CONFIG_EXPLICIT == 1 )); then
+    die "Configuration file not found: $CONFIG_FILE"
+else
+    debug "No configuration found at $CONFIG_FILE; using environment variables or prompts."
 fi
 
+# Resolve API credentials from configuration or environment variables.
 IPINFO_TOKEN=$(trim_whitespace "${IPINFO_TOKEN:-}")
 IPQS_KEY=$(trim_whitespace "${IPQS_KEY:-${IPQS_API_KEY:-}}")
 GREYNOISE_KEY=$(trim_whitespace \
@@ -231,11 +255,13 @@ prompt_for_token() {
                 printf '\n' >&2
                 return 0
             fi
+
             printf '\n' >&2
             value=$(trim_whitespace "$value")
             printf -v "$variable" '%s' "$value"
             ;;
     esac
+
     return 0
 }
 
@@ -247,15 +273,19 @@ if [[ "$IP_VERSION" == 4 ]]; then
     prompt_for_token GREYNOISE_KEY "GreyNoise"
 fi
 
-# Prevent malformed headers caused by embedded CR/LF in credentials.
+# Pulsedive is attempted without a key if one is not configured.
+
+# Reject embedded CR/LF characters in API credentials.
 for token_name in \
     IPINFO_TOKEN IPQS_KEY GREYNOISE_KEY OSM_KEY PULSEDIVE_KEY
 do
     token_value=${!token_name}
+
     if [[ "$token_value" == *$'\r'* || "$token_value" == *$'\n'* ]]; then
         die "$token_name contains an embedded newline."
     fi
 done
+
 unset token_name token_value
 
 format_response() {
@@ -270,7 +300,8 @@ format_response() {
     printf '%s\n' "$body"
 }
 
-# Shared HTTP response state; request functions run in the current shell.
+# Shared HTTP response state.
+# Call request functions directly, not through command substitution.
 HTTP_STATUS=""
 HTTP_BODY=""
 
@@ -285,11 +316,13 @@ http_get() {
     HTTP_STATUS=""
     HTTP_BODY=""
 
-    # Disable ~/.curlrc, keep diagnostics on stderr, and do not follow
-    # redirects automatically. Never print URLs containing API keys.
+    # Disable ~/.curlrc and keep curl diagnostics on stderr.
+    # Do not automatically follow redirects.
+    # Avoid printing URLs because some contain API credentials.
     response=$(
         curl --disable \
-            --silent --show-error \
+            --silent \
+            --show-error \
             --globoff \
             --connect-timeout 5 \
             --max-time 20 \
@@ -325,7 +358,10 @@ http_get() {
     return 0
 }
 
-# Return 0 for success, 1 for error, and 2 for an allowed no-record 404.
+# Return:
+#   0: Successful response
+#   1: Lookup error
+#   2: Allowed no-record HTTP 404
 lookup() {
     local provider=$1
     local url=$2
@@ -343,6 +379,7 @@ lookup() {
                     "$provider" >&2
                 return 1
             fi
+
             format_response "$HTTP_BODY"
             return 0
             ;;
@@ -364,7 +401,8 @@ lookup() {
     return 1
 }
 
-# Ordinary providers: no-record responses do not count as failures.
+# Track failed lookup attempts without stopping subsequent providers.
+# Allowed no-record responses do not count as failures.
 run_lookup() {
     local result=0
 
@@ -377,9 +415,11 @@ run_lookup() {
     return 0
 }
 
-# Shodan InternetDB: keep this integration IPv4-only.
+# Shodan InternetDB lookup.
+# This integration is restricted to IPv4.
 if [[ "$IP_VERSION" == 4 ]]; then
     heading "Shodan InternetDB Results"
+
     run_lookup \
         "Shodan InternetDB" \
         "https://internetdb.shodan.io/$ip_address" \
@@ -388,7 +428,9 @@ else
     info "Skipping Shodan InternetDB: this integration is IPv4-only."
 fi
 
+# IPinfo lookup.
 heading "IPinfo Results"
+
 if [[ -n "$IPINFO_TOKEN" ]]; then
     run_lookup \
         "IPinfo" \
@@ -402,14 +444,16 @@ else
         no
 fi
 
+# IPQualityScore lookup.
 if [[ -n "$IPQS_KEY" ]]; then
     heading "IPQualityScore Results"
 
-    # The key is a URL path component; encode reserved characters.
+    # Encode the API key because it is included in a URL path.
     encoded_ipqs_key=$(
         python3 - "$IPQS_KEY" <<'PY'
 import sys
 from urllib.parse import quote
+
 print(quote(sys.argv[1], safe=""))
 PY
     )
@@ -418,11 +462,14 @@ PY
         "IPQualityScore" \
         "https://www.ipqualityscore.com/api/json/ip/$encoded_ipqs_key/$ip_address" \
         no
+
     unset encoded_ipqs_key
 else
     info "IPQualityScore API key not provided; skipping lookup."
 fi
 
+# GreyNoise lookup.
+# This integration is restricted to IPv4.
 if [[ "$IP_VERSION" == 4 ]]; then
     heading "GreyNoise Results"
 
@@ -442,6 +489,7 @@ if [[ "$IP_VERSION" == 4 ]]; then
             fi
 
             info "Trying GreyNoise Community with the configured key..."
+
             run_lookup \
                 "GreyNoise Community" \
                 "https://api.greynoise.io/v3/community/$ip_address" \
@@ -450,6 +498,7 @@ if [[ "$IP_VERSION" == 4 ]]; then
         fi
     else
         info "No GreyNoise key provided; trying Community without authentication."
+
         run_lookup \
             "GreyNoise Community" \
             "https://api.greynoise.io/v3/community/$ip_address" \
@@ -459,8 +508,10 @@ else
     info "Skipping GreyNoise: this integration requires IPv4."
 fi
 
+# OpenSourceMalware IP reputation lookup.
 if [[ -n "$OSM_KEY" ]]; then
     heading "OSM IP Reputation Results"
+
     run_lookup \
         "OpenSourceMalware" \
         "https://api.opensourcemalware.com/functions/v1/check-malicious" \
@@ -473,7 +524,9 @@ else
     info "OSM API key not provided; skipping lookup."
 fi
 
+# Pulsedive indicator lookup.
 heading "Pulsedive Indicator Results"
+
 pulsedive_options=(
     --get
     --data-urlencode "indicator=$ip_address"
@@ -492,6 +545,7 @@ run_lookup \
     yes \
     "${pulsedive_options[@]}"
 
+# Final status.
 if (( FAILURES > 0 )); then
     info "IPLookup complete with $FAILURES failed lookup attempt(s)."
     exit 1
