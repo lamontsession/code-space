@@ -1,8 +1,8 @@
-#!/bin/bash
+!#/bin/bash
 
 # Author: LaMont Session
 # Date Created: 2025-10-28
-# Last Modified: 2026-05-08
+# Last Modified: 2026-10-21
 
 # Description:
 # This is an ip lookup script that retrieves geographical, threat intelligence, and network information for a given IP address.
@@ -82,11 +82,11 @@ fi
 read -p "Enter an IP address to look up: " ip_address
 fi
 
-# Load configuration: allow override from CLI, default to ${HOME}/.iplookup.conf
+# Load configuration: allow override from CLI, default to ${PWD}/.iplookup.conf
 if [[ -n "${CONFIG_FILE_OVERRIDE:-}" ]]; then
 CONFIG_FILE="$CONFIG_FILE_OVERRIDE"
 else
-CONFIG_FILE="${HOME}/.iplookup.conf"
+CONFIG_FILE="${PWD}/.iplookup.conf"
 fi
 if [[ -f "$CONFIG_FILE" ]]; then
 # shellcheck source=/dev/null
@@ -100,7 +100,7 @@ exit 1
 fi
 if ! command -v jq >/dev/null 2>&1; then
 if [[ ${QUIET:-0} -eq 0 ]]; then
-printf "Note: 'jq' not found — output will be raw JSON.\n"
+printf "Note: 'jq' not found â€” output will be raw JSON.\n"
 fi
 fi
 
@@ -108,7 +108,7 @@ fi
 ipv4_regex='^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$'
 ipv6_regex='^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$'
 
-if ! [[ "$ip_address" =~ $ipv4_regex ]] && ! [[ "$ip_address" =~ $ipv6_regex ]]; then
+if ! [[ "$ip_address" =~ $ipv4_regex ]]& ! [[ "$ip_address" =~ $ipv6_regex ]]; then
 echo "Error: Invalid IP address format."
 exit 1
 fi
@@ -262,6 +262,76 @@ fi
 format_json_response "$response"
 }
 
+# GreyNoise-specific handling keeps no-data responses out of generic API errors.
+# Return 0 for results / Community no-data, 1 for errors, 2 for IP Lookup no-data.
+call_greynoise() {
+local endpoint=$1
+local ip=$2
+local api_key=${3:-}
+local url="https://api.greynoise.io/v3/$endpoint/$ip"
+local response http_code detail
+local exit_code=0
+local -a headers=(--header "Accept: application/json")
+if [[ -n "$api_key" ]]; then
+headers+=(--header "Key: $api_key")
+fi
+
+# Keep curl diagnostics on stderr, separate from the body and status trailer.
+# Do not use --fail: 404 bodies are useful normal no-data results.
+response=$(curl -sS --max-time 10 --request GET --url "$url" \
+"${headers[@]}" --write-out $'\n%{http_code}') || exit_code=$?
+http_code=${response##*$'\n'}
+if [[ $exit_code -ne 0 ]]; then
+printf 'Error: GreyNoise %s transport failure (curl exit %s; HTTP %s).\n' \
+"$endpoint" "$exit_code" "${http_code:-unavailable}" >&2
+return 1
+fi
+if [[ "$response" != *$'\n'* || ! "$http_code" =~ ^[0-9]{3}$ ]]; then
+printf 'Error: GreyNoise %s returned an invalid HTTP status trailer.\n' "$endpoint" >&2
+return 1
+fi
+response=${response%$'\n'*}
+if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
+printf '(verbose) GreyNoise %s: HTTP %s\n' "$endpoint" "$http_code" >&2
+fi
+
+case "$http_code" in
+200)
+if [[ -z "$response" ]]; then
+printf 'Error: GreyNoise %s returned HTTP 200 with an empty body.\n' "$endpoint" >&2
+return 1
+fi
+format_json_response "$response"
+return 0
+;;
+404)
+if [[ ${QUIET:-0} -eq 0 ]]; then
+printf 'GreyNoise %s: no record found for %s (HTTP 404); this does not establish that the IP is safe.\n' "$endpoint" "$ip"
+if [[ -n "$response" ]]; then
+format_json_response "$response"
+fi
+fi
+# Still try Community after the authenticated IP Lookup has no record.
+if [[ "$endpoint" == "ip" ]]; then
+return 2
+fi
+return 0
+;;
+400) detail='Invalid request; check whether the IP is supported and publicly routable.' ;;
+401) detail='Authentication failed; check the GreyNoise API key.' ;;
+403) detail='Access denied; check the API key permissions and plan entitlement.' ;;
+429) detail='Rate limit reached; retry later or check your plan quota.' ;;
+5??) detail='GreyNoise server error; retry later.' ;;
+3??) detail='Unexpected redirect; check the API endpoint.' ;;
+*) detail='Unexpected HTTP response.' ;;
+esac
+printf 'Error: GreyNoise %s HTTP %s - %s\n' "$endpoint" "$http_code" "$detail" >&2
+if [[ -n "$response" ]]; then
+format_json_response "$response" >&2
+fi
+return 1
+}
+
 # Function to call OpenSourceMalware Community Threat Database IP lookup (GET)
 call_osm_ip_reputation() {
 local api_key=$1
@@ -375,7 +445,7 @@ fi
 http_code=$(printf "%s" "$response" | tail -n1)
 response=$(printf "%s" "$response" | sed '$d')
 
-# 404 means Shodan has no data for this IP — not a hard error
+# 404 means Shodan has no data for this IP â€” not a hard error
 if [[ $http_code -eq 404 ]]; then
 if [[ ${QUIET:-0} -eq 0 ]]; then
 printf "No Shodan InternetDB data found for %s\n" "$ip"
@@ -400,7 +470,7 @@ format_json_response "$response"
 
 # Shodan InternetDB lookup (no API key required)
 printf "\n--- Shodan InternetDB Results ---\n"
-if ! call_shodan_internetdb "$ip_address"; then
+if ! calshodan_internetdb "$ip_address"; then
 if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
 printf "(verbose) Failed to retrieve Shodan InternetDB data\n" >&2
 fi
@@ -434,30 +504,19 @@ fi
 fi
 
 # GreyNoise lookup
+GREYNOISE_KEY=$(trim_whitespace "$GREYNOISE_KEY")
 if [[ -n "$GREYNOISE_KEY" ]]; then
-GREYNOISE_URL="https://api.greynoise.io/v3/ip/$ip_address"
 printf "\n--- GreyNoise Results ---\n"
-if ! call_api_with_header_auth "$GREYNOISE_URL" "X-API-Key" "$GREYNOISE_KEY"; then
+if ! call_greynoise "ip" "$ip_address" "$GREYNOISE_KEY"; then
 if [[ ${QUIET:-0} -eq 0 ]]; then
-if [[ ${VERBOSE:-0} -eq 1 ]]; then
-printf "(verbose) Failed to retrieve GreyNoise data with token, falling back to community results...\n" >&2
-else
-printf "Failed to retrieve GreyNoise data with token, falling back to community results...\n"
+printf 'Trying GreyNoise Community results (unauthenticated fallback)...\n' >&2
 fi
-fi
-if ! call_api_public "https://api.greynoise.io/v3/community/$ip_address"; then
-if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
-printf "(verbose) Failed to retrieve GreyNoise community data\n" >&2
-fi
-fi
+# Preserve the public fallback, including when the configured key is invalid.
+call_greynoise "community" "$ip_address" || :
 fi
 else
 printf "\n--- GreyNoise Community Results ---\n"
-if ! call_api_public "https://api.greynoise.io/v3/community/$ip_address"; then
-if [[ ${VERBOSE:-0} -eq 1 && ${QUIET:-0} -eq 0 ]]; then
-printf "(verbose) Failed to retrieve GreyNoise community data\n" >&2
-fi
-fi
+call_greynoise "community" "$ip_address" || :
 fi
 
 # OSM IP Reputation lookup
