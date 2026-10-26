@@ -100,7 +100,7 @@ exit 1
 fi
 if ! command -v jq >/dev/null 2>&1; then
 if [[ ${QUIET:-0} -eq 0 ]]; then
-printf "Note: 'jq' not found â€” output will be raw JSON.\n"
+printf "Note: 'jq' not found — output will be raw JSON.\n"
 fi
 fi
 
@@ -445,7 +445,7 @@ fi
 http_code=$(printf "%s" "$response" | tail -n1)
 response=$(printf "%s" "$response" | sed '$d')
 
-# 404 means Shodan has no data for this IP â€” not a hard error
+# 404 means Shodan has no data for this IP — not a hard error
 if [[ $http_code -eq 404 ]]; then
 if [[ ${QUIET:-0} -eq 0 ]]; then
 printf "No Shodan InternetDB data found for %s\n" "$ip"
