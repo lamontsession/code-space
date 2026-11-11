@@ -1,173 +1,418 @@
 # IP Lookup Script
 
 ## Description
-The IP lookup script (`iplookup.sh`) retrieves geographical and network information for IP addresses using currently five services:
-- **IPinfo.io** - Provides basic geographical and network information
-- **IPQualityScore (IPQS)** - Provides additional IP intelligence and threat assessment (optional)
-- **GreyNoise** - Provides Threat Actor intelligence, internet scanning heuristics, known malicious IP detection
-- **OpenSourceMalware (OSM)** - Provides community threat reputation and malicious IP checks (optional)
-- **Pulsedive** - Provides threat intelligence indicator lookup with optional unauthenticated access
-- **Shodan InternetDB** - Provides service/port information and open port enumeration (public, no auth required)
 
-### Features
-- Automatic detection and usage of API tokens for supported services from environment variables, `~/.iplookup.conf` config file, or interactive input prompt
-- Interactive prompt mode – run `iplookup.sh` without arguments to be prompted for an IP address
-- Non-interactive mode with `--no-prompt` flag for CI/automation use (prevents hangs on missing tokens)
-- Quiet mode (`-q|--quiet`) to suppress non-error output; useful for scripting and automation
-- Verbose mode (`-v|--verbose`) for detailed debug output including failure diagnostics
-- Custom config file support via `-c|--config FILE` to override default `~/.iplookup.conf`
-- **Improved Error Handling**:
-  - User-Agent header on all requests for better server telemetry
-  - Automatic retry logic with exponential backoff (2^n seconds) for transient errors (429 Rate Limit, 5xx Server Errors)
-  - Configurable max retry attempts (default: 3 attempts)
-  - Clear distinction between client errors (400-499) and transient errors (429, 5xx)
-  - 404 errors treated as expected fallbacks (suppressed in quiet mode, verbose warning available)
-  - Empty response bodies displayed as "(no body)" instead of blank for clarity
-  - Request URLs included in error messages for debugging
-- API calls include a 10-second timeout and comprehensive HTTP error handling
-- Displays actual API error responses (HTTP status codes and server messages) instead of generic curl exit codes
-- Detection and reporting of rate limiting, empty responses, and failures for each service
-- Pretty-prints JSON results using jq if installed; otherwise outputs raw JSON
-- All API lookups configured independently and optional
-- Secure handling of tokens (masked when entering interactively, never echoed in output)
-- Requires only curl (mandatory) and jq (optional for pretty printing)
+`iplookup.sh` retrieves geographical, network, and threat-intelligence information for a single IPv4 or IPv6 address using seven integrated services:
 
+- SANS Internet Storm Center / DShield
+- Shodan InternetDB
+- IPinfo
+- IPQualityScore (IPQS)
+- GreyNoise
+- OpenSourceMalware (OSM)
+- Pulsedive
 
-### Prerequisites
-- `bash` shell
-- `curl` for making HTTP requests
-- `jq` (optional but recommended) for JSON formatting
+Providers are queried sequentially. Lookups depend on the address family and available API credentials.
 
+A missing record, zero reports, or a successful API request does not establish that an IP address is safe.
 
-### Installation
-1. Clone the repository:
+## Features
+
+- Validates and normalizes IPv4 and IPv6 addresses using Python's `ipaddress` module.
+- Rejects hostnames, URLs, CIDR ranges, scoped IPv6 addresses, and IPv4 addresses with leading zeros.
+- Normalizes carriage returns in validator output to prevent incorrect address-family comparisons.
+- Protects the validated IP address and address-family variables from subsequent reassignment.
+- Supports credentials through environment variables, trusted Bash configuration files, and optional interactive entry.
+- Preserves backward-compatible credential aliases.
+- Supports interactive, noninteractive, quiet, and verbose operation.
+- Continues subsequent provider lookups after an individual request fails.
+- Reports HTTP failures, transport failures, and empty successful-response bodies.
+- Uses a 5-second connection timeout and 20-second overall timeout per request.
+- Requires HTTPS, does not automatically follow redirects, and disables curl's default configuration file.
+- Pretty-prints JSON with `jq` when available; otherwise prints raw response bodies.
+- Returns exit codes suitable for automation.
+
+The script does not implement automatic retries, exponential backoff, configurable retry limits, a custom User-Agent, or provider-specific interpretation of HTTP 2xx error objects.
+
+## Prerequisites
+
+Required:
+
+- Bash
+- `curl`
+- `python3`
+
+Optional:
+
+- `jq` for JSON formatting
+
+Run the script directly or with `bash`, not `sh`.
+
+## Installation
+
 ```bash
 git clone https://github.com/lamontsession/code-space.git
 cd code-space/iplookup
-```
-
-2. Make the script executable:
-```bash
 chmod +x iplookup.sh
 ```
 
-### Configuration
-You can configure API tokens in three ways:
+Check Bash syntax:
 
-1. Environment variables:
 ```bash
-export IPINFO_TOKEN="your_ipinfo_token"          # For IPinfo.io service
-export IPQS_KEY="your_ipqs_api_key"              # For IPQualityScore service (optional)
-export GREYNOISE_KEY="your_greynoise_key"        # For GreyNoise service (optional)
-export OSM_KEY="your_osm_api_key"                # For OpenSourceMalware service (optional)
-export PULSEDIVE_KEY="your_pulsedive_api_key"    # For Pulsedive service (optional)
+bash -n ./iplookup.sh
 ```
 
-2. Configuration file:
-Create `~/.iplookup.conf` with:
-```bash
-IPINFO_TOKEN="your_ipinfo_token"          # For IPinfo.io service
-IPQS_KEY="your_ipqs_api_key"              # For IPQualityScore service (optional)
-GREYNOISE_KEY="your_greynoise_key"        # For GreyNoise service (optional)
-OSM_KEY="your_osm_api_key"                # For OpenSourceMalware service (optional)
-PULSEDIVE_KEY="your_pulsedive_api_key"    # For Pulsedive service (optional)
+Syntax checks do not validate API availability, credentials, or runtime behavior.
+
+## Provider Support
+
+Providers run in this order:
+
+| Order | Provider | Address-family behavior | Credential behavior |
+|---|---|---|---|
+| 1 | SANS ISC/DShield | IPv4 only in this integration | No key used |
+| 2 | Shodan InternetDB | IPv4 only in this integration | No key used |
+| 3 | IPinfo | IPv4 and IPv6 attempted | Bearer token if configured; otherwise unauthenticated |
+| 4 | IPQualityScore | Either validated family attempted when configured | Key required to run |
+| 5 | GreyNoise | IPv4 only in this integration | Authenticated IP lookup with a key; otherwise unauthenticated Community attempt |
+| 6 | OpenSourceMalware | Either validated family attempted when configured | Key required to run |
+| 7 | Pulsedive | IPv4 and IPv6 attempted | Configured key or unauthenticated attempt |
+
+"Attempted" describes script behavior, not guaranteed provider or subscription support.
+
+The script runs without API keys, but unauthenticated requests can fail because of authentication requirements, rate limits, or access restrictions.
+
+## Configuration
+
+### Default Location
+
+The default configuration is:
+
+```text
+${PWD}/.iplookup.conf
 ```
 
-3. Interactive input:
-If no tokens are found in environment variables or the configuration file, the script will prompt you to enter them manually during execution (unless `--no-prompt` is used). You can:
-- Choose to enter an IPinfo.io token (Bearer token authentication)
-- Choose to enter an IPQualityScore API key
-- Choose to enter an OpenSourceMalware (OSM) API key
-- Choose to enter a GreyNoise API key
-- Skip all to use the services without authentication
+This is the current working directory, not automatically the home directory or the script directory.
 
-Note: The script works without API tokens but with rate limitations. Using API tokens provides higher rate limits and additional features. The script will use the first available token it finds in the order: environment variables → configuration file → manual input.
+To use a home-directory configuration:
 
-### Usage
 ```bash
-./iplookup.sh <IP_ADDRESS>              # Look up specific IP address
-./iplookup.sh                           # Interactive prompt for IP address
-./iplookup.sh -q                        # Quiet mode (suppress non-error output)
-./iplookup.sh -v                        # Verbose mode (detailed debug output)
-./iplookup.sh -c ~/.custom.conf         # Use alternate config file
-./iplookup.sh --config /path/to/conf    # Use alternate config file (long form)
-./iplookup.sh --no-prompt               # Non-interactive mode (skip token prompts)
-./iplookup.sh -h                        # Show help message
-./iplookup.sh --help                    # Show help message
+./iplookup.sh --config "$HOME/.iplookup.conf" --no-prompt 8.8.8.8
+```
 
+A missing default configuration is allowed. An explicitly requested file must exist and be a readable regular file.
 
-### Command-Line Options
-- `-q, --quiet` — Suppress non-error output; useful for scripting and automation
-- `-v, --verbose` — Print verbose debug information including failure reasons and retry attempts
-- `-c, --config FILE` — Specify an alternate configuration file (overrides `~/.iplookup.conf`)
-- `--no-prompt` — Non-interactive mode; do not prompt for missing API tokens (useful in CI/automation)
-- `-h, --help` — Display help message and exit
+### Environment Variables
 
-### Output Format
-The script queries multiple services in order and displays results for each. All results are formatted as JSON (pretty-printed if `jq` is installed):
+```bash
+export IPINFO_TOKEN="your_ipinfo_token"
+export IPQS_API_KEY="your_ipqs_api_key"
+export GREYNOISE_API_KEY="your_greynoise_api_key"
+export OSM_API_KEY="your_osm_api_key"
+export PULSEDIVE_API_KEY="your_pulsedive_api_key"
+```
 
-1. **Shodan InternetDB** (public API, no authentication required):
-   - Open ports enumeration
-   - Services and banners
-   - CVE information associated with services
-   - **Note**: Returns 404 gracefully if IP has no Shodan data
+Configure only the credentials you intend to use.
 
-2. **IPinfo.io** (always queried):
-   - Geographical location (city, region, country)
-   - Network information (ASN, organization)
-   - Coordinates (latitude/longitude)
-   - IPinfo Bearer token authentication (if provided)
+### Configuration File
 
-3. **IPQualityScore (IPQS)** (if API key provided):
-   - Fraud score and risk assessment
-   - VPN/Proxy detection
-   - Additional threat intelligence
-   - Optional; skipped if no API key configured
+Create `.iplookup.conf` in your working directory:
 
-4. **GreyNoise** (with API key or free community API):
-   - Threat Actor intelligence
-   - Known malicious IP detection
-   - Internet scanning behavior analysis
-   - Supports authenticated API (with key) and free community API (50 searches/week limit)
-   - Falls back to community API if token-based query fails (HTTP 404)
+```bash
+IPINFO_TOKEN="your_ipinfo_token"
+IPQS_API_KEY="your_ipqs_api_key"
+GREYNOISE_API_KEY="your_greynoise_api_key"
+OSM_API_KEY="your_osm_api_key"
+PULSEDIVE_API_KEY="your_pulsedive_api_key"
+```
 
-5. **OpenSourceMalware (OSM)** (if API key provided):
-   - Community threat reputation and malicious IP checks
-   - Bearer token authentication
-   - Optional; queried after GreyNoise
+Protect the file:
 
-6. **Pulsedive** (always attempted, with or without key):
-   - Indicator lookup for IP addresses
-   - Optional authenticated lookup, with unauthenticated fallback
-   - Provides additional threat intelligence and context
+```bash
+chmod 600 .iplookup.conf
+```
 
-**Error Handling**: If any API query fails, the actual HTTP status code and server error message are displayed (e.g., "Error: HTTP 403 from https://api.example.com - Unauthorized") instead of generic curl exit codes, making diagnosis straightforward. Transient errors (429, 5xx) are automatically retried with exponential backoff.
+Add it to `.gitignore`:
 
-All results are displayed as JSON. When `jq` is installed, results are pretty-printed for readability; otherwise, raw JSON is displayed.
+```gitignore
+.iplookup.conf
+```
 
-### Error Handling & Resilience
+Configuration files are executable Bash code. Only load trusted files. Do not assign `IP_VERSION` or `ip_address`; these are read-only before configuration loads.
 
-**Automatic Retries:**
-- Transient errors (HTTP 429 Rate Limit, 5xx Server Errors) trigger automatic retries
-- Exponential backoff: 1 second, 2 seconds, 4 seconds (configurable max attempts)
-- Silent retries in quiet mode; verbose logging in `-v` mode
-- Client errors (4xx except 404) and permanent failures fail immediately
+### Backward-Compatible Aliases
 
-**Degradation:**
-- 404 errors on authenticated GreyNoise endpoint → automatic fallback to community API
-- Missing API keys → services skipped with informative messages
-- Network timeouts → clear error messages with request URLs
-- Empty responses → detected and reported separately from malformed JSON
+| Canonical variable | Alias |
+|---|---|
+| `IPINFO_TOKEN` | None |
+| `IPQS_API_KEY` | `IPQS_KEY` |
+| `GREYNOISE_API_KEY` | `GREYNOISE_KEY` |
+| `OSM_API_KEY` | `OSM_KEY` |
+| `PULSEDIVE_API_KEY` | `PULSEDIVE_KEY` |
 
-**Security Improvements:**
-- User-Agent header identifies requests (prevents blocking by WAF)
-- No API tokens echoed to output or logs
-- Tokens masked during interactive entry (using `read -rs`)
-- Request URLs logged for debugging (aids in troubleshooting)
+The first nonempty canonical value takes precedence over its alias after surrounding whitespace is trimmed.
+
+### Credential Resolution
+
+1. Environment variables are inherited.
+2. The configuration file is sourced, and assignments can overwrite environment values.
+3. Canonical names and aliases are resolved.
+4. Missing credentials can be entered interactively where supported.
+
+Configuration does not automatically have lower priority than the environment. To preserve an environment value:
+
+```bash
+IPINFO_TOKEN="${IPINFO_TOKEN:-your_default_token}"
+```
+
+### Interactive Entry
+
+When standard input is a terminal and prompting is enabled, missing credentials can be entered for:
+
+- IPinfo
+- IPQualityScore
+- OpenSourceMalware
+- GreyNoise, for IPv4 targets only
+
+Prompts can be declined, and credential entry is hidden. Pulsedive keys must come from configuration or environment variables; no Pulsedive credential prompt is provided.
+
+Credentials are checked for embedded carriage returns and newlines before and after prompting.
+
+## Usage
+
+Place options before the target address. Only one target is accepted.
+
+### IPv4 Lookup
+
+```bash
+./iplookup.sh 8.8.8.8
+```
+
+### IPv6 Lookup
+
+```bash
+./iplookup.sh --no-prompt 2001:4860:4860::8888
+```
+
+SANS, Shodan InternetDB, and GreyNoise are skipped for IPv6 by this integration.
+
+### Interactive Mode
+
+```bash
+./iplookup.sh
+```
+
+Prompts for an IP address and offers supported missing-credential prompts.
+
+### Noninteractive Mode
+
+```bash
+./iplookup.sh --no-prompt 8.8.8.8
+```
+
+Disables address and credential prompts. A target is required. Prompting is also disabled when standard input is not a terminal.
+
+### Quiet Mode
+
+```bash
+./iplookup.sh --quiet 8.8.8.8
+```
+
+Suppresses headings, informational messages, debug output, and prompts. Successful bodies remain on standard output; errors remain on standard error.
+
+### Verbose Mode
+
+```bash
+./iplookup.sh --verbose --no-prompt 8.8.8.8
+```
+
+Reports the validated family and target using shell-escaped formatting, configuration-loading information, and completed-request HTTP statuses. Quiet mode takes precedence.
+
+### Alternate Configuration
+
+```bash
+./iplookup.sh --config "$HOME/.iplookup.conf" --no-prompt 8.8.8.8
+./iplookup.sh --config="$HOME/.iplookup.conf" --no-prompt 8.8.8.8
+```
+
+### Help
+
+```bash
+./iplookup.sh --help
+```
+
+## Command-Line Options
+
+| Option | Behavior |
+|---|---|
+| `-q`, `--quiet` | Suppresses headings, informational messages, diagnostics, and prompts |
+| `-v`, `--verbose` | Additional diagnostics to standard error unless quiet |
+| `-c FILE`, `--config FILE` | Loads a trusted alternate configuration |
+| `--config=FILE` | Alternate configuration syntax |
+| `--no-prompt` | Disables all interactive prompts |
+| `-h`, `--help` | Displays help and exits successfully |
+| `--` | Ends option parsing |
+
+## Output
+
+Successful bodies go to standard output. Headings, informational messages, diagnostics, and errors go to standard error.
+
+With `jq`, each body is formatted as JSON when possible. If formatting fails or `jq` is absent, the raw body is printed. Responses are not guaranteed to be JSON.
+
+Results are consecutive response bodies, not one combined JSON document. Standard output has no structured provider labels.
+
+Separate results and diagnostics:
+
+```bash
+./iplookup.sh --no-prompt 8.8.8.8 > results.txt 2> diagnostics.log
+```
+
+Capture combined human-readable output:
+
+```bash
+./iplookup.sh --no-prompt 8.8.8.8 > lookup-report.txt 2>&1
+```
+
+## Provider-Specific Behavior
+
+### SANS Internet Storm Center / DShield
+
+Uses this IP-summary endpoint:
+
+```text
+https://isc.sans.edu/api/ip/<IP_ADDRESS>?json
+```
+
+IPv4 only, no key used, and HTTP 404 counts as failure rather than an allowed no-record result.
+
+### Shodan InternetDB
+
+IPv4 only, no key used. Displays the returned record without additional enrichment. HTTP 404 is an allowed no-record result.
+
+### IPinfo
+
+Always attempted for a validated target. Uses `Authorization: Bearer` when a token is configured; otherwise attempts the same endpoint without authentication.
+
+### IPQualityScore
+
+Runs only with a key. Python URL-encodes the key before it is placed in the request path.
+
+### GreyNoise
+
+For IPv4:
+
+1. With a key, attempts the authenticated IP endpoint.
+2. On failure or an allowed no-record result, attempts Community using the same key.
+3. Without a key, attempts Community without authentication.
+
+An authenticated failure remains counted even if Community succeeds.
+
+### OpenSourceMalware
+
+Runs only with a key. Uses Bearer authentication and sends `report_type=ip` with the target as the resource identifier.
+
+### Pulsedive
+
+Always attempted for a validated target, using a key when configured. Does not retry without a key after authenticated failure.
+
+## Error Handling and Limitations
+
+### HTTP Handling
+
+| Response | Handling |
+|---|---|
+| HTTP 2xx, nonempty body | Prints body and counts request as successful |
+| HTTP 2xx, empty body | Counts as failure |
+| HTTP 404 from Shodan, GreyNoise, or Pulsedive | Allowed no-record result |
+| HTTP 404 from other providers | Counts as failure |
+| Other non-2xx statuses, including 429 and 5xx | Counts as failure and displays any body |
+
+HTTP 2xx API-level error objects are not interpreted as failures.
+
+### Transport Failures
+
+Connection, TLS, DNS, and timeout failures are reported with provider name and curl exit code. Subsequent providers are still attempted.
+
+### Timeouts and Retries
+
+- Connection timeout: 5 seconds.
+- Overall timeout: 20 seconds per request.
+- No automatic retries or retry-delay settings.
+- GreyNoise Community fallback is a separate lookup, not a general retry mechanism.
+
+### Request Configuration
+
+- HTTPS required.
+- Redirects not automatically followed.
+- curl default configuration disabled.
+- No custom User-Agent.
+- Request URLs not intentionally included in script diagnostics.
+
+## Exit Codes
+
+| Code | Meaning |
+|---|---|
+| `0` | All attempted lookups succeeded or returned allowed no-record responses |
+| `1` | One or more attempted lookups failed |
+| `2` | Invalid input, missing dependency, or explicitly handled configuration error |
+
+Skipped providers do not count as failures. Unhandled shell or configuration errors can terminate with a different status because configuration executes Bash code and strict mode is enabled.
+
+```bash
+./iplookup.sh --no-prompt 8.8.8.8
+status=$?
+printf 'Exit status: %s\n' "$status"
+```
+
+## Troubleshooting
+
+### IPv4 Providers Unexpectedly Skipped
+
+```bash
+./iplookup.sh --verbose --no-prompt 8.8.8.8
+```
+
+Expected validation diagnostic:
+
+```text
+(verbose) Validated target: IP_VERSION=4 ip_address=8.8.8.8
+```
+
+The script normalizes carriage returns in validator output and protects the validated variables from reassignment.
+
+### Read-Only Variable Error
+
+Remove `IP_VERSION` and `ip_address` assignments from configuration. Keep configuration focused on supported credentials.
+
+### Test Without Normal Configuration
+
+```bash
+empty_config=$(mktemp)
+./iplookup.sh --verbose --no-prompt --config "$empty_config" 8.8.8.8
+status=$?
+rm -f -- "$empty_config"
+printf 'Exit status: %s\n' "$status"
+```
+
+`/dev/null` is rejected because configuration must be a readable regular file.
+
+### Failed Requests
+
+Review standard error for provider name, HTTP status, response body, or curl exit code. Check credentials, subscription access, connectivity, and provider limits. Avoid sharing unsanitized responses or shell traces.
+
+## Security Considerations
+
+- Configuration files execute with the invoking user's privileges.
+- Hidden credential entry does not prevent credentials from residing in process memory.
+- Some credentials are passed in command arguments and may be visible to sufficiently privileged local observers.
+- Response bodies are displayed without secret redaction.
+- Avoid `bash -x` with credentials configured; tracing can expose secrets.
+- Do not commit credential files.
+- Providers receive the target IP. Consider investigation sensitivity and organizational policy before submitting indicators.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License. See the `LICENSE` file for details.
 
 ## Author
 
@@ -175,4 +420,4 @@ LaMont Session
 
 ## Last Updated
 
-2026-06-27
+2026-11-11

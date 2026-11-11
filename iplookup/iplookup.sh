@@ -2,7 +2,7 @@
 
 # Author: LaMont Session
 # Date Created: 2025-10-28
-# Last Modified: 2026-10-25
+# Last Modified: 2026-11-11
 #
 # Description:
 # Retrieve geographical, threat intelligence, and network information
@@ -41,20 +41,38 @@ Options:
 Default configuration:
   .iplookup.conf in the current working directory
 
-Supported configuration variables):
+Supported configuration variables:
   IPINFO_TOKEN
   IPQS_API_KEY
   GREYNOISE_API_KEY
   OSM_API_KEY
   PULSEDIVE_API_KEY
 
+Backward-compatible aliases:
+  IPQS_KEY
+  GREYNOISE_KEY
+  OSM_KEY
+  PULSEDIVE_KEY
+
+When both names are configured, the first nonempty canonical variable wins.
+
+Lookup providers:
+  SANS ISC/DShield (IPv4 in this integration; no API key required)
+  Shodan InternetDB, IPinfo, IPQualityScore, GreyNoise,
+  OpenSourceMalware, and Pulsedive
+
 Exit codes:
   0  All attempted lookups succeeded or returned no record
   1  One or more attempted lookups failed
   2  Invalid input, configuration, or missing dependency
 
+A successful HTTP response is not necessarily a successful API result.
+Provider-specific error objects inside HTTP 2xx responses are displayed
+but are not currently interpreted as lookup failures.
+
 A missing threat-intelligence record does not establish that an IP is safe.
 Configuration files are executed as Bash code; only use trusted files.
+Do not assign IP_VERSION or ip_address in configuration files.
 EOF
 }
 
@@ -143,7 +161,7 @@ while (( $# > 0 )); do
     esac
 done
 
-(( $# <= 1 )) || die "Expected exactly one IP address."
+(( $# <= 1 )) || die "Expected at most one IP address."
 
 # Obtain the target IP.
 if (( $# == 1 )); then
@@ -176,6 +194,7 @@ else
 fi
 
 # Validate and normalize IPv4/IPv6 input.
+# Return one tab-delimited record to avoid newline-splitting ambiguity.
 # Hostnames, URLs, CIDR ranges, scoped IPv6 addresses, and IPv4
 # addresses with leading zeros are deliberately not accepted.
 if ! parsed_ip=$(
@@ -189,24 +208,60 @@ try:
     if "%" in value:
         raise ValueError("Scoped IPv6 addresses are not supported")
     address = ipaddress.ip_address(value)
-except ValueError:
+except ValueError as exc:
+    print(f"IP validation failed: {exc}", file=sys.stderr)
     sys.exit(1)
 
-print(address.version)
-print(address.compressed)
+sys.stdout.write(f"{address.version}\t{address.compressed}\n")
 PY
 ); then
     die "Invalid IP address: $ip_address"
 fi
 
-IP_VERSION=${parsed_ip%%$'\n'*}
-ip_address=${parsed_ip#*$'\n'}
+# Command substitution removes trailing LF characters but can leave CR.
+parsed_ip=${parsed_ip//$'\r'/}
+
+case "$parsed_ip" in
+    4$'\t'*|6$'\t'*)
+        IP_VERSION=${parsed_ip%%$'\t'*}
+        ip_address=${parsed_ip#*$'\t'}
+        ;;
+    *)
+        printf 'Error: unexpected IP validator output: %q\n' \
+            "$parsed_ip" >&2
+        exit 2
+        ;;
+esac
+
+[[ -n "$ip_address" ]] ||
+    die "IP validation returned an empty address."
+
+# Reject unexpected extra fields or embedded newlines.
+if [[ "$ip_address" == *$'\t'* || "$ip_address" == *$'\n'* ]]; then
+    die "IP validation returned malformed output."
+fi
+
+# Prevent configuration files or later functions from changing the
+# validated address family or lookup target.
+readonly IP_VERSION ip_address
+
+if (( VERBOSE == 1 && QUIET == 0 )); then
+    printf '(verbose) Validated target: IP_VERSION=%q ip_address=%q\n' \
+        "$IP_VERSION" "$ip_address" >&2
+fi
+
+unset parsed_ip
 
 # Load .iplookup.conf from the current working directory unless
 # an alternate configuration file was explicitly requested.
-#
 if (( CONFIG_EXPLICIT == 1 )); then
     CONFIG_FILE=$CONFIG_FILE_OVERRIDE
+
+    # Resolve relative paths explicitly instead of searching PATH.
+    case "$CONFIG_FILE" in
+        /*) ;;
+        *) CONFIG_FILE="${PWD}/$CONFIG_FILE" ;;
+    esac
 else
     CONFIG_FILE="${PWD}/.iplookup.conf"
 fi
@@ -217,6 +272,7 @@ if [[ -e "$CONFIG_FILE" ]]; then
 
     debug "Loading trusted configuration: $CONFIG_FILE"
 
+    # Configuration is executable Bash code.
     # shellcheck source=/dev/null
     source "$CONFIG_FILE"
 elif (( CONFIG_EXPLICIT == 1 )); then
@@ -225,14 +281,31 @@ else
     debug "No configuration found at $CONFIG_FILE; using environment variables or prompts."
 fi
 
-# Resolve API credentials from configuration or environment variables.
-IPINFO_TOKEN=$(trim_whitespace "${IPINFO_TOKEN:-}")
-IPQS_KEY=$(trim_whitespace "${IPQS_KEY:-${IPQS_API_KEY:-}}")
-GREYNOISE_KEY=$(trim_whitespace \
-    "${GREYNOISE_KEY:-${GREYNOISE_API_KEY:-}}")
-OSM_KEY=$(trim_whitespace "${OSM_KEY:-${OSM_API_KEY:-}}")
-PULSEDIVE_KEY=$(trim_whitespace \
-    "${PULSEDIVE_KEY:-${PULSEDIVE_API_KEY:-}}")
+# Resolve credentials from configuration or environment variables.
+# Missing optional credentials are not errors.
+resolve_api_key() {
+    local var
+    local result=""
+
+    for var in "$@"; do
+        result=$(trim_whitespace "${!var:-}")
+
+        if [[ -n "$result" ]]; then
+            printf '%s' "$result"
+            return 0
+        fi
+    done
+
+    return 0
+}
+
+# Use canonical names throughout provider lookup blocks.
+# Preserve compatibility with older configuration aliases.
+IPINFO_TOKEN=$(resolve_api_key IPINFO_TOKEN)
+IPQS_API_KEY=$(resolve_api_key IPQS_API_KEY IPQS_KEY)
+GREYNOISE_API_KEY=$(resolve_api_key GREYNOISE_API_KEY GREYNOISE_KEY)
+OSM_API_KEY=$(resolve_api_key OSM_API_KEY OSM_KEY)
+PULSEDIVE_API_KEY=$(resolve_api_key PULSEDIVE_API_KEY PULSEDIVE_KEY)
 
 prompt_for_token() {
     local variable=$1
@@ -240,7 +313,10 @@ prompt_for_token() {
     local answer=""
     local value=""
 
-    [[ -z "${!variable}" ]] || return 0
+    [[ "$variable" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] ||
+        die "Invalid variable name: $variable"
+
+    [[ -z "${!variable:-}" ]] || return 0
     (( NO_PROMPT == 0 )) || return 0
     [[ -t 0 ]] || return 0
 
@@ -265,28 +341,41 @@ prompt_for_token() {
     return 0
 }
 
+validate_api_credentials() {
+    local token_name
+    local token_value
+
+    for token_name in \
+        IPINFO_TOKEN \
+        IPQS_API_KEY \
+        GREYNOISE_API_KEY \
+        OSM_API_KEY \
+        PULSEDIVE_API_KEY
+    do
+        token_value=${!token_name:-}
+
+        if [[ "$token_value" == *$'\r'* ||
+              "$token_value" == *$'\n'* ]]; then
+            die "$token_name contains an embedded newline."
+        fi
+    done
+
+    return 0
+}
+
+validate_api_credentials
+
 prompt_for_token IPINFO_TOKEN "IPinfo"
-prompt_for_token IPQS_KEY "IPQualityScore"
-prompt_for_token OSM_KEY "OpenSourceMalware"
+prompt_for_token IPQS_API_KEY "IPQualityScore"
+prompt_for_token OSM_API_KEY "OpenSourceMalware"
 
 if [[ "$IP_VERSION" == 4 ]]; then
-    prompt_for_token GREYNOISE_KEY "GreyNoise"
+    prompt_for_token GREYNOISE_API_KEY "GreyNoise"
 fi
 
-# Pulsedive is attempted without a key if one is not configured.
-
-# Reject embedded CR/LF characters in API credentials.
-for token_name in \
-    IPINFO_TOKEN IPQS_KEY GREYNOISE_KEY OSM_KEY PULSEDIVE_KEY
-do
-    token_value=${!token_name}
-
-    if [[ "$token_value" == *$'\r'* || "$token_value" == *$'\n'* ]]; then
-        die "$token_name contains an embedded newline."
-    fi
-done
-
-unset token_name token_value
+# Pulsedive is attempted without a key when one is not configured.
+# Validate credentials again after interactive input.
+validate_api_credentials
 
 format_response() {
     local body=$1
@@ -316,9 +405,9 @@ http_get() {
     HTTP_STATUS=""
     HTTP_BODY=""
 
-    # Disable ~/.curlrc and keep curl diagnostics on stderr.
-    # Do not automatically follow redirects.
-    # Avoid printing URLs because some contain API credentials.
+    # --disable must be the first curl option to disable ~/.curlrc.
+    # Keep diagnostics on stderr and do not automatically follow redirects.
+    # Do not log URLs because some contain API credentials.
     response=$(
         curl --disable \
             --silent \
@@ -348,6 +437,9 @@ http_get() {
     HTTP_STATUS=${response##*$'\n'}
     HTTP_BODY=${response%$'\n'*}
 
+    # Normalize a possible CR on the status trailer only.
+    HTTP_STATUS=${HTTP_STATUS%$'\r'}
+
     if [[ ! "$HTTP_STATUS" =~ ^[0-9]{3}$ ]]; then
         printf 'Error: %s returned an invalid HTTP status.\n' \
             "$provider" >&2
@@ -359,9 +451,12 @@ http_get() {
 }
 
 # Return:
-#   0: Successful response
+#   0: Successful HTTP response with a nonempty body
 #   1: Lookup error
 #   2: Allowed no-record HTTP 404
+#
+# Provider-specific error objects inside HTTP 2xx responses are displayed
+# but are not currently interpreted as failures.
 lookup() {
     local provider=$1
     local url=$2
@@ -415,6 +510,22 @@ run_lookup() {
     return 0
 }
 
+# SANS Internet Storm Center / DShield IP summary.
+# This integration is deliberately restricted to IPv4.
+# No API key is required.
+# Zero reports or a missing record is not a safety verdict.
+# HTTP 404 is not treated as a confirmed no-record result here.
+if [[ "$IP_VERSION" == 4 ]]; then
+    heading "SANS Internet Storm Center / DShield Results"
+
+    run_lookup \
+        "SANS ISC/DShield" \
+        "https://isc.sans.edu/api/ip/$ip_address?json" \
+        no
+else
+    info "Skipping SANS ISC/DShield: target $ip_address is IPv$IP_VERSION; this integration is IPv4-only."
+fi
+
 # Shodan InternetDB lookup.
 # This integration is restricted to IPv4.
 if [[ "$IP_VERSION" == 4 ]]; then
@@ -425,7 +536,7 @@ if [[ "$IP_VERSION" == 4 ]]; then
         "https://internetdb.shodan.io/$ip_address" \
         yes
 else
-    info "Skipping Shodan InternetDB: this integration is IPv4-only."
+    info "Skipping Shodan InternetDB: target $ip_address is IPv$IP_VERSION; this integration is IPv4-only."
 fi
 
 # IPinfo lookup.
@@ -445,18 +556,20 @@ else
 fi
 
 # IPQualityScore lookup.
-if [[ -n "$IPQS_KEY" ]]; then
+if [[ -n "$IPQS_API_KEY" ]]; then
     heading "IPQualityScore Results"
 
-    # Encode the API key because it is included in a URL path.
-    encoded_ipqs_key=$(
-        python3 - "$IPQS_KEY" <<'PY'
+    # Encode the key because it is included in a URL path.
+    if ! encoded_ipqs_key=$(
+        python3 - "$IPQS_API_KEY" <<'PY'
 import sys
 from urllib.parse import quote
 
 print(quote(sys.argv[1], safe=""))
 PY
-    )
+    ); then
+        die "Unable to encode the IPQualityScore API key."
+    fi
 
     run_lookup \
         "IPQualityScore" \
@@ -475,15 +588,17 @@ if [[ "$IP_VERSION" == 4 ]]; then
 
     greynoise_result=0
 
-    if [[ -n "$GREYNOISE_KEY" ]]; then
+    if [[ -n "$GREYNOISE_API_KEY" ]]; then
         lookup \
             "GreyNoise IP Lookup" \
             "https://api.greynoise.io/v3/ip/$ip_address" \
             yes \
-            --header "key: $GREYNOISE_KEY" ||
+            --header "key: $GREYNOISE_API_KEY" ||
             greynoise_result=$?
 
         if (( greynoise_result != 0 )); then
+            # Preserve attempted-request failure accounting:
+            # a successful fallback does not erase a prior failed attempt.
             if (( greynoise_result == 1 )); then
                 FAILURES=$((FAILURES + 1))
             fi
@@ -494,7 +609,7 @@ if [[ "$IP_VERSION" == 4 ]]; then
                 "GreyNoise Community" \
                 "https://api.greynoise.io/v3/community/$ip_address" \
                 yes \
-                --header "key: $GREYNOISE_KEY"
+                --header "key: $GREYNOISE_API_KEY"
         fi
     else
         info "No GreyNoise key provided; trying Community without authentication."
@@ -505,18 +620,18 @@ if [[ "$IP_VERSION" == 4 ]]; then
             yes
     fi
 else
-    info "Skipping GreyNoise: this integration requires IPv4."
+    info "Skipping GreyNoise: target $ip_address is IPv$IP_VERSION; this integration is IPv4-only."
 fi
 
 # OpenSourceMalware IP reputation lookup.
-if [[ -n "$OSM_KEY" ]]; then
+if [[ -n "$OSM_API_KEY" ]]; then
     heading "OSM IP Reputation Results"
 
     run_lookup \
         "OpenSourceMalware" \
         "https://api.opensourcemalware.com/functions/v1/check-malicious" \
         no \
-        --header "Authorization: Bearer $OSM_KEY" \
+        --header "Authorization: Bearer $OSM_API_KEY" \
         --get \
         --data-urlencode "report_type=ip" \
         --data-urlencode "resource_identifier=$ip_address"
@@ -533,8 +648,10 @@ pulsedive_options=(
     --data-urlencode "pretty=1"
 )
 
-if [[ -n "$PULSEDIVE_KEY" ]]; then
-    pulsedive_options+=(--data-urlencode "key=$PULSEDIVE_KEY")
+if [[ -n "$PULSEDIVE_API_KEY" ]]; then
+    pulsedive_options+=(
+        --data-urlencode "key=$PULSEDIVE_API_KEY"
+    )
 else
     info "No Pulsedive key provided; attempting a rate-limited unauthenticated lookup."
 fi
