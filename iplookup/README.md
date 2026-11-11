@@ -69,7 +69,7 @@ Syntax checks do not validate API availability, credentials, or runtime behavior
 Providers run in this order:
 
 | Order | Provider | Address-family behavior | Credential behavior |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 1 | SANS ISC/DShield | IPv4 only in this integration | No key used |
 | 2 | Shodan InternetDB | IPv4 only in this integration | No key used |
 | 3 | IPinfo | IPv4 and IPv6 attempted | Bearer token if configured; otherwise unauthenticated |
@@ -143,7 +143,7 @@ Configuration files are executable Bash code. Only load trusted files. Do not as
 ### Backward-Compatible Aliases
 
 | Canonical variable | Alias |
-|---|---|
+| --- | --- |
 | `IPINFO_TOKEN` | None |
 | `IPQS_API_KEY` | `IPQS_KEY` |
 | `GREYNOISE_API_KEY` | `GREYNOISE_KEY` |
@@ -244,7 +244,7 @@ Reports the validated family and target using shell-escaped formatting, configur
 ## Command-Line Options
 
 | Option | Behavior |
-|---|---|
+| --- | --- |
 | `-q`, `--quiet` | Suppresses headings, informational messages, diagnostics, and prompts |
 | `-v`, `--verbose` | Additional diagnostics to standard error unless quiet |
 | `-c FILE`, `--config FILE` | Loads a trusted alternate configuration |
@@ -320,7 +320,7 @@ Always attempted for a validated target, using a key when configured. Does not r
 ### HTTP Handling
 
 | Response | Handling |
-|---|---|
+| --- | --- |
 | HTTP 2xx, nonempty body | Prints body and counts request as successful |
 | HTTP 2xx, empty body | Counts as failure |
 | HTTP 404 from Shodan, GreyNoise, or Pulsedive | Allowed no-record result |
@@ -351,7 +351,7 @@ Connection, TLS, DNS, and timeout failures are reported with provider name and c
 ## Exit Codes
 
 | Code | Meaning |
-|---|---|
+| --- | --- |
 | `0` | All attempted lookups succeeded or returned allowed no-record responses |
 | `1` | One or more attempted lookups failed |
 | `2` | Invalid input, missing dependency, or explicitly handled configuration error |
